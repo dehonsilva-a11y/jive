@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Painel de Gestão Operacional - GoTo & Gemini</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f5; margin: 20px; color: #333; }
+        .cabecalho { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .status-tempo-real { display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 13px; color: #006644; background: #e3fcef; padding: 6px 12px; border-radius: 20px; }
+        .ponto-vivo { width: 10px; height: 10px; background: #00875a; border-radius: 50%; box-shadow: 0 0 6px #00875a; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+
+        /* BARRA DE FILTROS COM MULTI-SELECT */
+        .filtros-container { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap; }
+        .filtro-grupo { display: flex; flex-direction: column; gap: 5px; position: relative; }
+        .filtro-grupo label { font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase; }
+        .filtro-grupo input[type="date"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; outline: none; height: 36px; box-sizing: border-box; }
+
+        /* COMPONENTE MULTI-SELECT DROPDOWN */
+        .multiselect { position: relative; width: 220px; }
+        .multiselect-btn { width: 100%; height: 36px; padding: 0 10px; background: #fff; border: 1px solid #ccc; border-radius: 4px; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 13px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .multiselect-btn:after { content: "▼"; font-size: 10px; color: #888; margin-left: 8px; }
+        .multiselect-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); max-height: 220px; overflow-y: auto; z-index: 1000; padding: 6px 0; margin-top: 2px; }
+        .multiselect-menu.show { display: block; }
+        .multiselect-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; user-select: none; }
+        .multiselect-item:hover { background: #f0f4f8; }
+        .multiselect-item input[type="checkbox"] { cursor: pointer; }
+
+        /* CARDS KPI */
+        .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .card-kpi { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: center; border-bottom: 4px solid #002b49; }
+        .card-kpi h3 { margin: 0 0 8px 0; font-size: 12px; color: #666; text-transform: uppercase; }
+        .card-kpi span { font-size: 24px; font-weight: bold; color: #002b49; }
+
+        /* TABELAS */
+        .secao-bloco { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px; overflow-x: auto; }
+        .secao-bloco h3 { margin-top: 0; color: #002b49; font-size: 16px; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        th, td { padding: 10px 12px; border-bottom: 1px solid #ddd; text-align: left; font-size: 13px; }
+        th { background: #f8f9fa; font-weight: 600; }
+
+        .tag-pendente { background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; }
+        .tag-ok { background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; }
+        .estrela-csat { color: #f59e0b; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="cabecalho">
+        <h2>Monitoramento Operacional GoTo & Gemini</h2>
+        <div class="status-tempo-real">
+            <span class="ponto-vivo"></span>
+            <span id="labelSync">Sincronização ativa (5s)</span>
+        </div>
+    </div>
+
+    <!-- SESSÃO DE FILTROS COM SELEÇÃO MÚLTIPLA E CASCATA -->
+    <div class="filtros-container">
+        <!-- MULTISELECT FILA -->
+        <div class="filtro-grupo">
+            <label>Filas</label>
+            <div class="multiselect" id="ms-fila">
+                <button type="button" class="multiselect-btn" id="btn-ms-fila">Todas as Filas</button>
+                <div class="multiselect-menu" id="menu-ms-fila"></div>
+            </div>
+        </div>
+
+        <!-- MULTISELECT CONSULTOR (DINÂMICO) -->
+        <div class="filtro-grupo">
+            <label>Consultores</label>
+            <div class="multiselect" id="ms-consultor">
+                <button type="button" class="multiselect-btn" id="btn-ms-consultor">Todos os Consultores</button>
+                <div class="multiselect-menu" id="menu-ms-consultor"></div>
+            </div>
+        </div>
+
+        <!-- MULTISELECT STATUS -->
+        <div class="filtro-grupo">
+            <label>Status</label>
+            <div class="multiselect" id="ms-status">
+                <button type="button" class="multiselect-btn" id="btn-ms-status">Todos</button>
+                <div class="multiselect-menu" id="menu-ms-status">
+                    <label class="multiselect-item"><input type="checkbox" value="Pendente" class="chk-status"> Pendente de Resposta</label>
+                    <label class="multiselect-item"><input type="checkbox" value="Respondido" class="chk-status"> Respondido</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="filtro-grupo">
+            <label>Data Início</label>
+            <input type="date" id="filtro-data-inicio">
+        </div>
+        <div class="filtro-grupo">
+            <label>Data Fim</label>
+            <input type="date" id="filtro-data-fim">
+        </div>
+    </div>
+
+    <!-- CARDS DE VISÃO GERAL -->
+    <div class="kpis">
+        <div class="card-kpi"><h3>Atendimentos</h3><span id="kpi-total">0</span></div>
+        <div class="card-kpi"><h3>Pendentes</h3><span id="kpi-pendentes" style="color:#991b1b">0</span></div>
+        <div class="card-kpi"><h3>TME Médio (Espera)</h3><span id="kpi-tme">0 min</span></div>
+        <div class="card-kpi"><h3>TMA Médio (Duração)</h3><span id="kpi-tma">0 min</span></div>
+        <div class="card-kpi"><h3>TMR Médio (Resposta)</h3><span id="kpi-tmr">0 min</span></div>
+        <div class="card-kpi"><h3>CSAT GoTo Geral</h3><span id="kpi-csat-geral">--</span></div>
+    </div>
+
+    <!-- CONSOLIDADO POR FILA -->
+    <div class="secao-bloco">
+        <h3>Painel Consolidado por Fila (Departamentos)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Fila / Departamento</th>
+                    <th>Total Chamados</th>
+                    <th>Pendentes de Resposta</th>
+                    <th>TME Médio (Espera)</th>
+                    <th>TMA Médio (Duração)</th>
+                    <th>TMR Médio (Resposta)</th>
+                    <th>Média CSAT (Exclusivo GoTo)</th>
+                </tr>
+            </thead>
+            <tbody id="tabela-filas">
+                <tr><td colspan="7">Aguardando dados...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- CONSOLIDADO POR COLABORADOR -->
+    <div class="secao-bloco">
+        <h3>Painel Consolidado de Colaboradores</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Colaborador</th>
+                    <th>Filas Vinculadas</th>
+                    <th>Chamados Atendidos</th>
+                    <th>TME Médio (Espera)</th>
+                    <th>TMA Médio (Duração)</th>
+                    <th>TMR Médio (Resposta)</th>
+                    <th>Média CSAT (Exclusivo GoTo)</th>
+                </tr>
+            </thead>
+            <tbody id="tabela-colaboradores">
+                <tr><td colspan="7">Aguardando dados...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- DETALHAMENTO INDIVIDUAL -->
+    <div class="secao-bloco">
+        <h3>Detalhamento Individual de Conversas</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Data</th>
+                    <th>Fila</th>
+                    <th>Consultor</th>
+                    <th>Assunto (Gemini)</th>
+                    <th>TME</th>
+                    <th>TMA</th>
+                    <th>TMR</th>
+                    <th>Status</th>
+                    <th>Qualidade</th>
+                </tr>
+            </thead>
+            <tbody id="tabela-conversas">
+                <tr><td colspan="9">Sincronizando conversas...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const prefixo = window.location.pathname.match(/^(\/poc\/\d+)/)?.[1] || '';
+        let dadosGlobais = [];
+
+        // Controle dos itens selecionados nos Multi-Selects
+        let selecionadosFila = new Set();
+        let selecionadosConsultor = new Set();
+        let selecionadosStatus = new Set();
+
+        // 1. SINCRONIZAÇÃO EM SEGUNDO PLANO
+        async function buscarDadosBackground() {
+            try {
+                const res = await fetch(prefixo + '/api/dashboard');
+                const json = await res.json();
+                if (!json.sucesso) return;
+
+                dadosGlobais = json.dados;
+                atualizarOpcoesFila();
+                atualizarOpcoesConsultoresDinamico();
+                aplicarFiltros();
+            } catch (err) {
+                console.error("Falha na sincronização periódica:", err);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            configurarDropdowns();
+            buscarDadosBackground();
+            setInterval(buscarDadosBackground, 5000);
+        });
+
+        // Configuração de abertura/fechamento dos dropdowns ao clicar
+        function configurarDropdowns() {
+            document.querySelectorAll('.multiselect-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const menu = btn.nextElementSibling;
+                    document.querySelectorAll('.multiselect-menu').forEach(m => {
+                        if (m !== menu) m.classList.remove('show');
+                    });
+                    menu.classList.toggle('show');
+                });
+            });
+
+            document.addEventListener('click', () => {
+                document.querySelectorAll('.multiselect-menu').forEach(m => m.classList.remove('show'));
+            });
+
+            document.querySelectorAll('.multiselect-menu').forEach(menu => {
+                menu.addEventListener('click', e => e.stopPropagation());
+            });
+
+            // Listeners de Status fixo
+            document.querySelectorAll('.chk-status').forEach(chk => {
+                chk.addEventListener('change', () => {
+                    if (chk.checked) selecionadosStatus.add(chk.value);
+                    else selecionadosStatus.delete(chk.value);
+                    atualizarRotuloBotao('ms-status', selecionadosStatus, 'Todos');
+                    aplicarFiltros();
+                });
+            });
+
+            document.getElementById('filtro-data-inicio').addEventListener('change', aplicarFiltros);
+            document.getElementById('filtro-data-fim').addEventListener('change', aplicarFiltros);
+        }
+
+        function atualizarRotuloBotao(idContainer, conjunto, textoPadrao) {
+            const btn = document.querySelector(`#${idContainer} .multiselect-btn`);
+            if (conjunto.size === 0) {
+                btn.textContent = textoPadrao;
+            } else if (conjunto.size === 1) {
+                btn.textContent = [...conjunto][0];
+            } else {
+                btn.textContent = `${conjunto.size} selecionados`;
+            }
+        }
+
+        // 2. ATUALIZA LISTA DE FILAS DISPONÍVEIS
+        function atualizarOpcoesFila() {
+            const menu = document.getElementById('menu-ms-fila');
+            const filas = [...new Set(dadosGlobais.map(d => d.fila))].sort();
+
+            menu.innerHTML = '';
+            filas.forEach(f => {
+                const label = document.createElement('label');
+                label.className = 'multiselect-item';
+                const checked = selecionadosFila.has(f) ? 'checked' : '';
+                label.innerHTML = `<input type="checkbox" value="${f}" ${checked}> ${f}`;
+
+                label.querySelector('input').addEventListener('change', (e) => {
+                    if (e.target.checked) selecionadosFila.add(f);
+                    else selecionadosFila.delete(f);
+
+                    atualizarRotuloBotao('ms-fila', selecionadosFila, 'Todas as Filas');
+                    // Cascata: recalcula imediatamente os consultores da(s) fila(s) escolhida(s)
+                    atualizarOpcoesConsultoresDinamico();
+                    aplicarFiltros();
+                });
+
+                menu.appendChild(label);
+            });
+
+            atualizarRotuloBotao('ms-fila', selecionadosFila, 'Todas as Filas');
+        }
+
+        // 3. RECALCULA CONSULTORES DISPONÍVEIS DE ACORDO COM A(S) FILA(S) SELECIONADA(S)
+        function atualizarOpcoesConsultoresDinamico() {
+            const menu = document.getElementById('menu-ms-consultor');
+
+            // Se há filas selecionadas, filtra apenas consultores vinculados a elas
+            let baseParaConsultores = dadosGlobais;
+            if (selecionadosFila.size > 0) {
+                baseParaConsultores = dadosGlobais.filter(d => selecionadosFila.has(d.fila));
+            }
+
+            const consultoresValidos = [...new Set(baseParaConsultores
+                .map(d => d.consultor)
+                .filter(c => c && c !== "Não atribuído")
+            )].sort();
+
+            // Remove consultores que deixaram de ser válidos na nova seleção de fila
+            selecionadosConsultor = new Set([...selecionadosConsultor].filter(c => consultoresValidos.includes(c)));
+
+            menu.innerHTML = '';
+            if (consultoresValidos.length === 0) {
+                menu.innerHTML = '<div style="padding:8px 12px; font-size:12px; color:#888;">Nenhum consultor nestas filas</div>';
+            } else {
+                consultoresValidos.forEach(c => {
+                    const label = document.createElement('label');
+                    label.className = 'multiselect-item';
+                    const checked = selecionadosConsultor.has(c) ? 'checked' : '';
+                    label.innerHTML = `<input type="checkbox" value="${c}" ${checked}> ${c}`;
+
+                    label.querySelector('input').addEventListener('change', (e) => {
+                        if (e.target.checked) selecionadosConsultor.add(c);
+                        else selecionadosConsultor.delete(c);
+
+                        atualizarRotuloBotao('ms-consultor', selecionadosConsultor, 'Todos os Consultores');
+                        aplicarFiltros();
+                    });
+
+                    menu.appendChild(label);
+                });
+            }
+
+            atualizarRotuloBotao('ms-consultor', selecionadosConsultor, 'Todos os Consultores');
+        }
+
+        const calcularMedia = arr => arr.length > 0 ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null;
+
+        // 4. APLICA FILTRAGEM MULTI-SELEÇÃO
+        function aplicarFiltros() {
+            const fDataIni = document.getElementById('filtro-data-inicio').value;
+            const fDataFim = document.getElementById('filtro-data-fim').value;
+
+            const filtrados = dadosGlobais.filter(d => {
+                // Filtro multi-seleção de Fila
+                if (selecionadosFila.size > 0 && !selecionadosFila.has(d.fila)) return false;
+
+                // Filtro multi-seleção de Consultor
+                if (selecionadosConsultor.size > 0 && !selecionadosConsultor.has(d.consultor)) return false;
+
+                // Filtro multi-seleção de Status
+                if (selecionadosStatus.size > 0 && !selecionadosStatus.has(d.status)) return false;
+
+                // Intervalo de Datas
+                if (fDataIni && d.data < fDataIni) return false;
+                if (fDataFim && d.data > fDataFim) return false;
+
+                return true;
+            });
+
+            renderizarPainelFilas(filtrados);
+            renderizarPainelColaboradores(filtrados);
+            renderizarPainelConversas(filtrados);
+            renderizarKPIsGerais(filtrados);
+        }
+
+        function renderizarPainelFilas(dados) {
+            const tbody = document.getElementById('tabela-filas');
+            tbody.innerHTML = '';
+
+            const mapaFilas = new Map();
+
+            dados.forEach(d => {
+                if (!mapaFilas.has(d.fila)) {
+                    mapaFilas.set(d.fila, {
+                        fila: d.fila,
+                        total: 0,
+                        pendentes: 0,
+                        tme: [],
+                        tma: [],
+                        tmr: [],
+                        notasGoTo: []
+                    });
+                }
+
+                const item = mapaFilas.get(d.fila);
+                item.total++;
+                if (d.status === 'Pendente') item.pendentes++;
+                if (d.tme_val !== null) item.tme.push(d.tme_val);
+                if (d.tma_val !== null) item.tma.push(d.tma_val);
+                if (d.tmr_val !== null) item.tmr.push(d.tmr_val);
+                if (d.nota_goto !== null) item.notasGoTo.push(d.nota_goto);
+            });
+
+            if (mapaFilas.size === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Nenhuma fila localizada para a seleção atual.</td></tr>';
+                return;
+            }
+
+            mapaFilas.forEach(f => {
+                const mediaTME = calcularMedia(f.tme);
+                const mediaTMA = calcularMedia(f.tma);
+                const mediaTMR = calcularMedia(f.tmr);
+                const mediaCSAT = calcularMedia(f.notasGoTo);
+
+                const csatFormatado = mediaCSAT !== null 
+                    ? `<span class="estrela-csat">★ ${mediaCSAT}</span> / 5.0 (${f.notasGoTo.length} aval.)` 
+                    : '<span style="color:#888;">Sem avaliação</span>';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${f.fila}</strong></td>
+                    <td>${f.total}</td>
+                    <td><span class="${f.pendentes > 0 ? 'tag-pendente' : 'tag-ok'}">${f.pendentes}</span></td>
+                    <td>${mediaTME !== null ? mediaTME + ' min' : 'N/D'}</td>
+                    <td>${mediaTMA !== null ? mediaTMA + ' min' : 'N/D'}</td>
+                    <td>${mediaTMR !== null ? mediaTMR + ' min' : 'N/D'}</td>
+                    <td>${csatFormatado}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderizarPainelColaboradores(dados) {
+            const tbody = document.getElementById('tabela-colaboradores');
+            tbody.innerHTML = '';
+
+            const mapaColab = new Map();
+
+            dados.forEach(d => {
+                if (d.consultor === "Não atribuído") return;
+
+                if (!mapaColab.has(d.consultor)) {
+                    mapaColab.set(d.consultor, {
+                        consultor: d.consultor,
+                        filas: new Set(),
+                        total: 0,
+                        tme: [],
+                        tma: [],
+                        tmr: [],
+                        notasGoTo: []
+                    });
+                }
+
+                const c = mapaColab.get(d.consultor);
+                c.total++;
+                c.filas.add(d.fila);
+                if (d.tme_val !== null) c.tme.push(d.tme_val);
+                if (d.tma_val !== null) c.tma.push(d.tma_val);
+                if (d.tmr_val !== null) c.tmr.push(d.tmr_val);
+                if (d.nota_goto !== null) c.notasGoTo.push(d.nota_goto);
+            });
+
+            if (mapaColab.size === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Nenhum colaborador com chamados para o filtro atual.</td></tr>';
+                return;
+            }
+
+            mapaColab.forEach(c => {
+                const mediaTME = calcularMedia(c.tme);
+                const mediaTMA = calcularMedia(c.tma);
+                const mediaTMR = calcularMedia(c.tmr);
+                const mediaCSAT = calcularMedia(c.notasGoTo);
+
+                const filasExibidas = [...c.filas].join(', ');
+                const csatFormatado = mediaCSAT !== null 
+                    ? `<span class="estrela-csat">★ ${mediaCSAT}</span> / 5.0 (${c.notasGoTo.length} aval.)` 
+                    : '<span style="color:#888;">Sem avaliação</span>';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${c.consultor}</strong></td>
+                    <td>${filasExibidas}</td>
+                    <td>${c.total}</td>
+                    <td>${mediaTME !== null ? mediaTME + ' min' : 'N/D'}</td>
+                    <td>${mediaTMA !== null ? mediaTMA + ' min' : 'N/D'}</td>
+                    <td>${mediaTMR !== null ? mediaTMR + ' min' : 'N/D'}</td>
+                    <td>${csatFormatado}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderizarPainelConversas(dados) {
+            const tbody = document.getElementById('tabela-conversas');
+            tbody.innerHTML = '';
+
+            if (dados.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">Nenhum registo encontrado.</td></tr>';
+                return;
+            }
+
+            dados.forEach(d => {
+                const tr = document.createElement('tr');
+                const tagClass = d.status === 'Pendente' ? 'tag-pendente' : 'tag-ok';
+                const dataFormatada = d.data.split('-').reverse().join('/');
+
+                tr.innerHTML = `
+                    <td>${dataFormatada}</td>
+                    <td><strong>${d.fila}</strong></td>
+                    <td>${d.consultor}</td>
+                    <td>${d.assunto}</td>
+                    <td>${d.tme_texto}</td>
+                    <td>${d.tma_texto}</td>
+                    <td>${d.tmr_texto}</td>
+                    <td><span class="${tagClass}">${d.status}</span></td>
+                    <td>${d.qualidade_resumo}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderizarKPIsGerais(dados) {
+            let pendentes = 0;
+            let temposTme = [], temposTma = [], temposTmr = [], notasGoTo = [];
+
+            dados.forEach(d => {
+                if (d.status === 'Pendente') pendentes++;
+                if (d.tme_val !== null) temposTme.push(d.tme_val);
+                if (d.tma_val !== null) temposTma.push(d.tma_val);
+                if (d.tmr_val !== null) temposTmr.push(d.tmr_val);
+                if (d.nota_goto !== null) notasGoTo.push(d.nota_goto);
+            });
+
+            const mediaTME = calcularMedia(temposTme);
+            const mediaTMA = calcularMedia(temposTma);
+            const mediaTMR = calcularMedia(temposTmr);
+            const mediaCSAT = calcularMedia(notasGoTo);
+
+            document.getElementById('kpi-total').textContent = dados.length;
+            document.getElementById('kpi-pendentes').textContent = pendentes;
+            document.getElementById('kpi-tme').textContent = mediaTME !== null ? `${mediaTME} min` : "0 min";
+            document.getElementById('kpi-tma').textContent = mediaTMA !== null ? `${mediaTMA} min` : "0 min";
+            document.getElementById('kpi-tmr').textContent = mediaTMR !== null ? `${mediaTMR} min` : "0 min";
+            document.getElementById('kpi-csat-geral').textContent = mediaCSAT !== null ? `${mediaCSAT} ★` : "--";
+        }
+    </script>
+</body>
+</html>

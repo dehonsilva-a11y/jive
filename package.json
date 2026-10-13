@@ -1,0 +1,15 @@
+{
+  "name": "poc-gestao-whatsapp",
+  "version": "1.0.3",
+  "description": "Painel de Gestão de Filas GoTo com auditoria Gemini",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
