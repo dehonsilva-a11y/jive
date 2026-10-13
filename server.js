@@ -69,7 +69,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. SETUP AUTOMÁTICO INTELIGENTE
+// 3. SETUP AUTOMÁTICO (ROTA ESPECÍFICA /webhook)
 // ==========================================
 app.get('/api/setup-webhook', async (req, res) => {
     const historico = [];
@@ -80,8 +80,8 @@ app.get('/api/setup-webhook', async (req, res) => {
         
         let channelId = null;
 
-        // ETAPA 1: Consultar se já existe um canal registrado
-        historico.push("[1] Verificando canais existentes via GET...");
+        // ETAPA 1: Consultar se já existe algum canal
+        historico.push("[1] Verificando se já existe canal criado...");
         try {
             const consulta = await fetch('https://api.goto.com/notification-channel/v1/channels', {
                 method: 'GET',
@@ -91,79 +91,61 @@ app.get('/api/setup-webhook', async (req, res) => {
             if (consulta.ok) {
                 const canais = await consulta.json();
                 const lista = Array.isArray(canais) ? canais : (canais.items || canais.data || []);
-                historico.push(`[1] Canais encontrados: ${lista.length}`);
-
-                const canalEncontrado = lista.find(c => 
-                    c.webhookUrl === webhookUrl || 
-                    (c.channelData && c.channelData.webhookUrl === webhookUrl)
-                ) || lista[0];
-
-                if (canalEncontrado) {
-                    channelId = canalEncontrado.channelId || canalEncontrado.id;
-                    historico.push(`[1] Canal reaproveitado com sucesso: ${channelId}`);
+                const existente = lista.find(c => (c.webhookUrl === webhookUrl || c.channelData?.webhookUrl === webhookUrl)) || lista[0];
+                if (existente) {
+                    channelId = existente.channelId || existente.id;
+                    historico.push(`[1] Canal existente reaproveitado: ${channelId}`);
                 }
-            } else {
-                historico.push(`[1] GET status: ${consulta.status}`);
             }
-        } catch (errGet) {
-            historico.push(`[1] Falha no GET: ${errGet.message}`);
+        } catch (e) {
+            historico.push(`[1] Falha consulta GET: ${e.message}`);
         }
 
-        // ETAPA 2: Se não houver canal, cria testando variações de rota
+        // ETAPA 2: Criar Canal via POST em /channels/webhook
         if (!channelId) {
-            historico.push("[2] Tentando criação ativa do canal...");
+            historico.push(`[2] Criando canal específico para Webhook: ${webhookUrl}`);
 
-            const tentativas = [
-                // Tentativa A: com barra no final (evita redirecionamento 301 que converte POST em GET)
-                {
-                    url: 'https://api.goto.com/notification-channel/v1/channels/',
-                    body: { channelType: "Webhook", webhookUrl: webhookUrl }
-                },
-                // Tentativa B: sem barra com channelData aninhado
-                {
-                    url: 'https://api.goto.com/notification-channel/v1/channels',
-                    body: { channelType: "Webhook", channelData: { webhookUrl: webhookUrl } }
-                },
-                // Tentativa C: sem barra direto
-                {
-                    url: 'https://api.goto.com/notification-channel/v1/channels',
-                    body: { channelType: "Webhook", webhookUrl: webhookUrl }
-                }
+            const rotasDeCriacao = [
+                'https://api.goto.com/notification-channel/v1/channels/webhook',
+                'https://api.goto.com/notification-channel/v1/channels/webhooks'
             ];
 
-            for (const tent of tentativas) {
-                historico.push(`[2] Tentando POST em ${tent.url}...`);
-                const canalResp = await fetch(tent.url, {
+            for (const urlRota of rotasDeCriacao) {
+                historico.push(`[2] Tentando POST em: ${urlRota}`);
+
+                const canalResp = await fetch(urlRota, {
                     method: 'POST',
                     headers: {
                         ...HEADERS_API,
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(tent.body)
+                    body: JSON.stringify({
+                        webhookUrl: webhookUrl
+                    })
                 });
 
-                const respostaTexto = await canalResp.text();
-                historico.push(`[2] Resposta status ${canalResp.status}: ${respostaTexto.slice(0, 150)}`);
+                const corpoResposta = await canalResp.text();
+                historico.push(`[2] Status ${canalResp.status}: ${corpoResposta.slice(0, 180)}`);
 
                 if (canalResp.ok) {
                     try {
-                        const dados = JSON.parse(respostaTexto);
+                        const dados = JSON.parse(corpoResposta);
                         channelId = dados.channelId || dados.id;
                         historico.push(`[2] Canal criado com sucesso: ${channelId}`);
                         break;
-                    } catch (e) {}
+                    } catch (err) {}
                 }
             }
         }
 
         if (!channelId) {
-            throw new Error(`Não foi possível obter ou criar um Canal de Notificação.\nDetalhes:\n${historico.join('\n')}`);
+            throw new Error(`Falha ao registrar canal de Webhook.\nHistórico:\n${historico.join('\n')}`);
         }
 
         // ETAPA 3: Criar Assinatura na API v2 de Mensagens
         const accountKey = "5363286181559338501";
-        historico.push(`[3] Registrando assinatura para a conta ${accountKey}...`);
+        historico.push(`[3] Vinculando assinatura à conta ${accountKey}...`);
 
         let subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
             method: 'POST',
@@ -181,7 +163,6 @@ app.get('/api/setup-webhook', async (req, res) => {
             })
         });
 
-        // Fallback sem ownerEntity se a API exigir formato simplificado
         if (!subResp.ok) {
             historico.push(`[3] Tentativa padrão falhou (${subResp.status}). Tentando formato simplificado...`);
             subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
@@ -201,7 +182,7 @@ app.get('/api/setup-webhook', async (req, res) => {
 
         const subTexto = await subResp.text();
         if (!subResp.ok) {
-            throw new Error(`Canal OK (${channelId}), mas falha na Assinatura (Status ${subResp.status}): ${subTexto}`);
+            throw new Error(`Canal criado (${channelId}), mas falha na Assinatura (Status ${subResp.status}): ${subTexto}`);
         }
 
         let subDados = {};
@@ -209,7 +190,7 @@ app.get('/api/setup-webhook', async (req, res) => {
 
         res.json({
             sucesso: true,
-            mensagem: "Webhook e Assinatura configurados com SUCESSO na GoTo!",
+            mensagem: "Webhook e Assinatura registrados com SUCESSO na GoTo!",
             channelId: channelId,
             webhookUrlUtilizada: webhookUrl,
             assinatura: subDados,
