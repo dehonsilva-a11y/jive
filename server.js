@@ -91,7 +91,12 @@ app.get('/api/setup-webhook', async (req, res) => {
             if (consulta.ok) {
                 const canais = await consulta.json();
                 const lista = Array.isArray(canais) ? canais : (canais.items || canais.data || []);
-                const existente = lista.find(c => (c.webhookUrl === webhookUrl || c.channelData?.webhookUrl === webhookUrl));
+                const existente = lista.find(c => 
+                    c.webhookUrl === webhookUrl || 
+                    c.webhookChannelData?.webhookUrl === webhookUrl || 
+                    c.channelData?.webhookUrl === webhookUrl
+                );
+                
                 if (existente) {
                     channelId = existente.channelId || existente.id;
                     historico.push(`[1] Canal existente reaproveitado: ${channelId}`);
@@ -101,32 +106,50 @@ app.get('/api/setup-webhook', async (req, res) => {
             historico.push(`[1] Falha consulta GET: ${e.message}`);
         }
 
-        // ETAPA 2: Criar Canal via POST
+        // ETAPA 2: Criar Canal via POST (Usando exatamente a variável que a GoTo pediu no erro)
         if (!channelId) {
             historico.push(`[2] Criando canal específico para Webhook: ${webhookUrl}`);
 
-            const canalResp = await fetch('https://api.goto.com/notification-channel/v1/channels/webhook', {
-                method: 'POST',
-                headers: {
-                    ...HEADERS_API,
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
+            const tentativasPayload = [
+                // 1. O payload exato que o servidor exigiu no último erro 400
+                {
+                    url: 'https://api.goto.com/notification-channel/v1/channels',
+                    body: {
+                        channelType: "Webhook",
+                        webhookChannelData: { webhookUrl: webhookUrl }
+                    }
                 },
-                body: JSON.stringify({
-                    channelType: "Webhook",
-                    webhookUrl: webhookUrl
-                })
-            });
+                // 2. O payload que obteve status 201 sucesso na sua penúltima tentativa
+                {
+                    url: 'https://api.goto.com/notification-channel/v1/channels/webhook',
+                    body: { webhookUrl: webhookUrl }
+                }
+            ];
 
-            const corpoResposta = await canalResp.text();
-            historico.push(`[2] Status Criação Canal ${canalResp.status}: ${corpoResposta.slice(0, 180)}`);
+            for (const tentativa of tentativasPayload) {
+                historico.push(`[2] Tentando POST em: ${tentativa.url}`);
 
-            if (canalResp.ok) {
-                try {
-                    const dados = JSON.parse(corpoResposta);
-                    channelId = dados.channelId || dados.id;
-                    historico.push(`[2] Canal criado com sucesso: ${channelId}`);
-                } catch (err) {}
+                const canalResp = await fetch(tentativa.url, {
+                    method: 'POST',
+                    headers: {
+                        ...HEADERS_API,
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(tentativa.body)
+                });
+
+                const corpoResposta = await canalResp.text();
+                historico.push(`[2] Status Criação Canal ${canalResp.status}: ${corpoResposta.slice(0, 180)}`);
+
+                if (canalResp.ok) {
+                    try {
+                        const dados = JSON.parse(corpoResposta);
+                        channelId = dados.channelId || dados.id;
+                        historico.push(`[2] Canal criado com sucesso: ${channelId}`);
+                        break;
+                    } catch (err) {}
+                }
             }
         }
 
