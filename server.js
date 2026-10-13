@@ -10,9 +10,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 // ==========================================
-// 1. CONFIGURAÇÕES & SEGURANÇA (VERCEL)
+// 1. CONFIGURAÇÕES & SEGURANÇA
 // ==========================================
-// Na Vercel, pegamos tudo das Variáveis de Ambiente
 const gemini_key = process.env.GEMINI_KEY || "";
 const ai = new GoogleGenAI({ apiKey: gemini_key });
 
@@ -20,8 +19,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// IMPORTANTE: Na Vercel (Serverless), a memória reinicia de tempos em tempos.
-// Para um PoC, funciona bem para testes rápidos em tempo real.
 const bancoDeConversas = new Map();
 const cacheAnalisesIA = new Map();
 
@@ -46,7 +43,7 @@ async function obterTokenGoTo() {
     const refreshToken = gotoTokenCache.refreshToken || process.env.GOTO_REFRESH_TOKEN;
 
     if (!clientId || !clientSecret || !refreshToken) {
-        throw new Error("Credenciais GoTo ausentes nas Variáveis de Ambiente da Vercel.");
+        throw new Error("Credenciais GoTo ausentes nas variáveis de ambiente da Vercel.");
     }
 
     const credenciaisBase64 = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -72,64 +69,100 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. SCRIPT DE SETUP AUTOMÁTICO (DINÂMICO)
+// 3. SCRIPT DE SETUP AUTOMÁTICO (ROTA OFICIAL)
 // ==========================================
 app.get('/api/setup-webhook', async (req, res) => {
     try {
         const token = await obterTokenGoTo();
-        
-        // Pega automaticamente a URL segura (https) gerada pela Vercel!
         const baseUrl = `https://${req.headers.host}`;
         const webhookUrl = `${baseUrl}/webhook`;
         
-        console.log(`\n[Setup] Iniciando registro seguro do Webhook: ${webhookUrl}`);
+        console.log(`[Setup] Criando Canal de Notificação oficial para: ${webhookUrl}`);
 
-        // PASSO 1: Criar Canal (v2 com fallback para v1)
-        const payloadCanal = JSON.stringify({
-            channelType: "Webhook", webhookUrl: webhookUrl, channelData: { webhookUrl: webhookUrl }
+        // PASSO 1: Criar Canal na rota oficial (/notifications/v1/channels)
+        const payloadCanal = {
+            channelType: "Webhook",
+            webhookUrl: webhookUrl
+        };
+
+        let canalResp = await fetch('https://api.goto.com/notifications/v1/channels', {
+            method: 'POST',
+            headers: {
+                ...HEADERS_API,
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payloadCanal)
         });
 
-        let canalResp = await fetch('https://api.goto.com/notification-channel/v2/channels', {
-            method: 'POST', headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: payloadCanal
-        });
-
-        if (!canalResp.ok && canalResp.status !== 403) {
-            canalResp = await fetch('https://api.goto.com/notification-channel/v1/channels', {
-                method: 'POST', headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: payloadCanal
+        // Caso a rota oficial reporte erro, tenta fallback para channelData aninhado
+        if (!canalResp.ok) {
+            console.log("[Setup] Tentando com payload alternativo...");
+            canalResp = await fetch('https://api.goto.com/notifications/v1/channels', {
+                method: 'POST',
+                headers: {
+                    ...HEADERS_API,
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    channelType: "Webhook",
+                    channelData: { webhookUrl: webhookUrl }
+                })
             });
         }
 
-        if (!canalResp.ok) throw new Error(`Falha no Canal: ${await canalResp.text()}`);
+        if (!canalResp.ok) {
+            const erroCanal = await canalResp.text();
+            throw new Error(`Falha no Canal: ${erroCanal}`);
+        }
+
         const canalDados = await canalResp.json();
         const channelId = canalDados.channelId || canalDados.id;
+        console.log(`[Setup] SUCESSO! Canal registrado: ${channelId}`);
 
-        // PASSO 2: Assinatura
+        // PASSO 2: Criar Assinatura na API v2 de Mensagens
         const accountKey = "5363286181559338501"; 
+        console.log(`[Setup] Vinculando assinatura à conta ${accountKey}...`);
+
         const subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
-            method: 'POST', headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: {
+                ...HEADERS_API,
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
-                accountKey, ownerEntity: accountKey, ownerEntityType: "ORGANIZATION",
-                channelId, eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE", "DELIVERY_STATUS"]
+                accountKey: accountKey,
+                ownerEntity: accountKey,
+                ownerEntityType: "ORGANIZATION",
+                channelId: channelId,
+                eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE", "DELIVERY_STATUS"]
             })
         });
 
-        if (!subResp.ok) throw new Error(`Falha na Assinatura: ${await subResp.text()}`);
+        if (!subResp.ok) {
+            const erroSub = await subResp.text();
+            throw new Error(`Falha na Assinatura: ${erroSub}`);
+        }
+
+        const subDados = await subResp.json();
 
         res.json({
             sucesso: true,
-            mensagem: "Webhook HTTPS cadastrado com SUCESSO ABSOLUTO na GoTo!",
-            webhookUrlUtilizada: webhookUrl
+            mensagem: "Webhook e Assinatura registrados com SUCESSO na GoTo!",
+            webhookUrlUtilizada: webhookUrl,
+            dados: { canal: canalDados, assinatura: subDados }
         });
 
     } catch (erro) {
+        console.error("[ERRO SETUP WEBHOOK]:", erro.message);
         res.status(500).json({ sucesso: false, erro: erro.message });
     }
 });
 
 // ==========================================
-// 4. OUVINTE DO WEBHOOK
+// 4. OUVINTE DO WEBHOOK (RECEBE DADOS DA GOTO)
 // ==========================================
 app.post('/webhook', (req, res) => {
     try {
@@ -144,8 +177,12 @@ app.post('/webhook', (req, res) => {
 
         if (!bancoDeConversas.has(convId)) {
             bancoDeConversas.set(convId, {
-                id: convId, fila: `WhatsApp Lello`, consultor: payload.authorTouchpoint || "Sistema",
-                startTime: evento.timestamp, status: 'ABERTA', mensagens: []
+                id: convId,
+                fila: `WhatsApp Contact Center`,
+                consultor: payload.authorTouchpoint || "Equipe",
+                startTime: evento.timestamp,
+                status: 'ABERTA',
+                mensagens: []
             });
         }
 
@@ -154,15 +191,19 @@ app.post('/webhook', (req, res) => {
         if (tipo === 'INBOUND_MESSAGE' || tipo === 'OUTBOUND_MESSAGE') {
             conversa.mensagens.push({
                 origem: tipo === 'INBOUND_MESSAGE' ? 'cliente' : 'consultor',
-                texto: payload.body || "[Mídia/Anexo]", hora: payload.timestamp || evento.timestamp
+                texto: payload.body || "[Mídia/Anexo]",
+                hora: payload.timestamp || evento.timestamp
             });
+            console.log(`[Webhook] Mensagem recebida! Conversa: ${convId} (${tipo})`);
         }
 
-        if (tipo === 'CONVERSATION_CLOSED' || payload.status === 'CLOSED') conversa.status = 'FECHADA';
+        if (tipo === 'CONVERSATION_CLOSED' || payload.status === 'CLOSED') {
+            conversa.status = 'FECHADA';
+        }
 
         res.status(200).json({ sucesso: true });
     } catch (e) {
-        res.status(500).send("Erro interno ao processar.");
+        res.status(500).send("Erro interno no webhook.");
     }
 });
 
@@ -221,15 +262,19 @@ app.get('/api/dashboard', async (req, res) => {
             let semantica = cacheAnalisesIA.get(chaveCache);
 
             if (!semantica) {
-                if (mensagens.length > 0 && mensagens.some(m => m.texto.trim() !== "")) {
-                    const prompt = `Analise a conversa:\n${mensagens.map(m => `${m.origem}:${m.texto}`).join('\n')}`;
-                    const response = await ai.models.generateContent({
-                        model: 'gemini-3.8-flash', contents: prompt,
-                        config: { responseMimeType: "application/json", responseSchema: esquemaIA, temperature: 0.1 }
-                    });
-                    semantica = JSON.parse(response.text);
+                if (gemini_key && mensagens.length > 0 && mensagens.some(m => m.texto.trim() !== "")) {
+                    try {
+                        const prompt = `Analise a conversa:\n${mensagens.map(m => `${m.origem}:${m.texto}`).join('\n')}`;
+                        const response = await ai.models.generateContent({
+                            model: 'gemini-3.8-flash', contents: prompt,
+                            config: { responseMimeType: "application/json", responseSchema: esquemaIA, temperature: 0.1 }
+                        });
+                        semantica = JSON.parse(response.text);
+                    } catch (errIA) {
+                        semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
+                    }
                 } else {
-                    semantica = { assunto_resumido: "Novo Contato", sentimento_inferido: "Neutro" };
+                    semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
                 }
                 cacheAnalisesIA.set(chaveCache, semantica);
             }
@@ -253,5 +298,4 @@ app.get('/api/dashboard', async (req, res) => {
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// Exportando para a Vercel Serverless
 export default app;
