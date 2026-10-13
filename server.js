@@ -69,7 +69,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. SETUP AUTOMÁTICO (ROTA ESPECÍFICA /webhook)
+// 3. SETUP AUTOMÁTICO INTELIGENTE
 // ==========================================
 app.get('/api/setup-webhook', async (req, res) => {
     const historico = [];
@@ -91,7 +91,7 @@ app.get('/api/setup-webhook', async (req, res) => {
             if (consulta.ok) {
                 const canais = await consulta.json();
                 const lista = Array.isArray(canais) ? canais : (canais.items || canais.data || []);
-                const existente = lista.find(c => (c.webhookUrl === webhookUrl || c.channelData?.webhookUrl === webhookUrl)) || lista[0];
+                const existente = lista.find(c => (c.webhookUrl === webhookUrl || c.channelData?.webhookUrl === webhookUrl));
                 if (existente) {
                     channelId = existente.channelId || existente.id;
                     historico.push(`[1] Canal existente reaproveitado: ${channelId}`);
@@ -101,71 +101,73 @@ app.get('/api/setup-webhook', async (req, res) => {
             historico.push(`[1] Falha consulta GET: ${e.message}`);
         }
 
-        // ETAPA 2: Criar Canal via POST em /channels/webhook
+        // ETAPA 2: Criar Canal via POST
         if (!channelId) {
             historico.push(`[2] Criando canal específico para Webhook: ${webhookUrl}`);
 
-            const rotasDeCriacao = [
-                'https://api.goto.com/notification-channel/v1/channels/webhook',
-                'https://api.goto.com/notification-channel/v1/channels/webhooks'
-            ];
+            const canalResp = await fetch('https://api.goto.com/notification-channel/v1/channels/webhook', {
+                method: 'POST',
+                headers: {
+                    ...HEADERS_API,
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    channelType: "Webhook",
+                    webhookUrl: webhookUrl
+                })
+            });
 
-            for (const urlRota of rotasDeCriacao) {
-                historico.push(`[2] Tentando POST em: ${urlRota}`);
+            const corpoResposta = await canalResp.text();
+            historico.push(`[2] Status Criação Canal ${canalResp.status}: ${corpoResposta.slice(0, 180)}`);
 
-                const canalResp = await fetch(urlRota, {
-                    method: 'POST',
-                    headers: {
-                        ...HEADERS_API,
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        webhookUrl: webhookUrl
-                    })
-                });
-
-                const corpoResposta = await canalResp.text();
-                historico.push(`[2] Status ${canalResp.status}: ${corpoResposta.slice(0, 180)}`);
-
-                if (canalResp.ok) {
-                    try {
-                        const dados = JSON.parse(corpoResposta);
-                        channelId = dados.channelId || dados.id;
-                        historico.push(`[2] Canal criado com sucesso: ${channelId}`);
-                        break;
-                    } catch (err) {}
-                }
+            if (canalResp.ok) {
+                try {
+                    const dados = JSON.parse(corpoResposta);
+                    channelId = dados.channelId || dados.id;
+                    historico.push(`[2] Canal criado com sucesso: ${channelId}`);
+                } catch (err) {}
             }
         }
 
         if (!channelId) {
-            throw new Error(`Falha ao registrar canal de Webhook.\nHistórico:\n${historico.join('\n')}`);
+            throw new Error(`Falha ao obter/registrar canal de Webhook.\nHistórico:\n${historico.join('\n')}`);
         }
 
-        // ETAPA 3: Criar Assinatura na API v2 de Mensagens
+        // ETAPA 3: Criar Assinatura na API v2 com Testes de Hierarquia
         const accountKey = "5363286181559338501";
-        historico.push(`[3] Vinculando assinatura à conta ${accountKey}...`);
+        
+        // Puxa o seu UserId para tentar inscrever como USER
+        let userId = null;
+        historico.push("[3] Buscando Perfil (UserId) para Permissões...");
+        try {
+            const meResp = await fetch('https://api.goto.com/users/v1/me', {
+                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
+            });
+            if (meResp.ok) {
+                const meDados = await meResp.json();
+                userId = meDados.id || meDados.userKey;
+                historico.push(`[3] Perfil localizado: User ID = ${userId}`);
+            }
+        } catch(e) {}
 
-        let subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
-            method: 'POST',
-            headers: {
-                ...HEADERS_API,
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                accountKey: accountKey,
-                ownerEntity: accountKey,
-                ownerEntityType: "ORGANIZATION",
-                channelId: channelId,
-                eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE", "DELIVERY_STATUS"]
-            })
-        });
+        historico.push(`[3] Testando Permissões de Assinatura para o canal ${channelId}...`);
 
-        if (!subResp.ok) {
-            historico.push(`[3] Tentativa padrão falhou (${subResp.status}). Tentando formato simplificado...`);
-            subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
+        // Testamos do mais provável para o menos provável
+        const tentativasHierarquia = [
+            { ownerEntityType: "ACCOUNT", ownerEntity: accountKey },
+            { ownerEntityType: "USER", ownerEntity: userId },
+            { ownerEntityType: "ORGANIZATION", ownerEntity: accountKey }
+        ];
+
+        let subDados = null;
+        let erroFinal = "";
+
+        for (const tent of tentativasHierarquia) {
+            if (!tent.ownerEntity) continue;
+            
+            historico.push(`[3] Tentando registrar como ${tent.ownerEntityType}...`);
+            const subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
                 method: 'POST',
                 headers: {
                     ...HEADERS_API,
@@ -174,19 +176,28 @@ app.get('/api/setup-webhook', async (req, res) => {
                 },
                 body: JSON.stringify({
                     accountKey: accountKey,
+                    ownerEntity: tent.ownerEntity,
+                    ownerEntityType: tent.ownerEntityType,
                     channelId: channelId,
                     eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE", "DELIVERY_STATUS"]
                 })
             });
+
+            const subTexto = await subResp.text();
+            
+            if (subResp.ok) {
+                try { subDados = JSON.parse(subTexto); } catch(e) { subDados = { info: "Assinatura Registrada" }; }
+                historico.push(`[3] SUCESSO ABSOLUTO! Assinatura registrada no nível ${tent.ownerEntityType}!`);
+                break; // Aprovado, para o loop!
+            } else {
+                erroFinal = subTexto;
+                historico.push(`[3] Negado no nível ${tent.ownerEntityType} (Status ${subResp.status})`);
+            }
         }
 
-        const subTexto = await subResp.text();
-        if (!subResp.ok) {
-            throw new Error(`Canal criado (${channelId}), mas falha na Assinatura (Status ${subResp.status}): ${subTexto}`);
+        if (!subDados) {
+            throw new Error(`Canal Criado (${channelId}), mas todas as permissões de Assinatura foram Negadas.\nÚltimo erro: ${erroFinal}`);
         }
-
-        let subDados = {};
-        try { subDados = JSON.parse(subTexto); } catch(e) {}
 
         res.json({
             sucesso: true,
