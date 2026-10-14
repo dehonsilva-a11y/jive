@@ -80,7 +80,8 @@ app.get('/api/setup-webhook', async (req, res) => {
         
         let channelId = null;
 
-        historico.push("[1] Buscando canal...");
+        // ETAPA 1: Reutilizar canal já criado
+        historico.push("[1] Buscando canal ativo existente...");
         try {
             const consulta = await fetch('https://api.goto.com/notification-channel/v1/channels', {
                 method: 'GET',
@@ -94,14 +95,18 @@ app.get('/api/setup-webhook', async (req, res) => {
                     c.webhookUrl === webhookUrl || 
                     c.webhookChannelData?.webhookUrl === webhookUrl || 
                     c.channelData?.webhookUrl === webhookUrl
-                );
+                ) || lista[0];
                 
-                if (existente) channelId = existente.channelId || existente.id;
+                if (existente) {
+                    channelId = existente.channelId || existente.id;
+                    historico.push(`[1] Canal existente encontrado: ${channelId}`);
+                }
             }
         } catch (e) {}
 
+        // ETAPA 2: Se não houver, cria na rota oficial
         if (!channelId) {
-            historico.push(`[2] Criando canal oficial para Webhook...`);
+            historico.push(`[2] Criando canal oficial para Webhook: ${webhookUrl}`);
             const canalResp = await fetch('https://api.goto.com/notification-channel/v1/channels/webhook', {
                 method: 'POST',
                 headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -110,77 +115,79 @@ app.get('/api/setup-webhook', async (req, res) => {
 
             const corpoResposta = await canalResp.text();
             if (canalResp.ok) {
-                try {
-                    const dados = JSON.parse(corpoResposta);
-                    channelId = dados.channelId || dados.id;
-                    historico.push(`[2] SUCESSO! Canal ID: ${channelId}`);
-                } catch (err) {}
+                const dados = JSON.parse(corpoResposta);
+                channelId = dados.channelId || dados.id;
+                historico.push(`[2] SUCESSO! Canal ID: ${channelId}`);
             } else {
                 throw new Error(`Falha ao criar canal: ${corpoResposta}`);
             }
         }
 
-        // ==========================================
-        // O GOLPE DE MESTRE: Decodificando o Token JWT
-        // ==========================================
-        let userId = null;
+        // ETAPA 3: Decodificar todas as informações de Org e Contas do JWT
+        let jwtClaims = {};
         try {
             const payloadBase64 = token.split('.')[1];
-            const jwtDecoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf-8'));
-            userId = jwtDecoded.sub || jwtDecoded.principal || jwtDecoded.userId || jwtDecoded.user_id;
-            historico.push(`[3] JWT decodificado. UserId exato: ${userId}`);
-        } catch(e) {
-            historico.push(`[3] Falha ao decodificar JWT.`);
-        }
+            jwtClaims = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf-8'));
+            historico.push(`[3] Claims do Token: ${JSON.stringify(Object.keys(jwtClaims))}`);
+        } catch(e) {}
 
-        historico.push(`[3] Testando Permissões de Assinatura...`);
+        const orgCandidatos = [
+            jwtClaims.org_id,
+            jwtClaims.organization_id,
+            jwtClaims.organizationId,
+            jwtClaims.orgId,
+            jwtClaims.account_key,
+            "5363286181559338501",
+            "4055072950408524550"
+        ].filter(Boolean);
 
-        // Cruzando as duas Account Keys que você possui para testar todas as hierarquias
-        const chavesConta = ["5363286181559338501", "4055072950408524550"];
-        const tentativasHierarquia = [];
+        // Remover duplicados mantendo a ordem
+        const orgsUnicas = [...new Set(orgCandidatos)];
+        const accountKeys = ["5363286181559338501", "4055072950408524550"];
 
-        for (const ak of chavesConta) {
-            if (userId) tentativasHierarquia.push({ ownerEntityType: "USER", ownerEntity: userId, accountKey: ak });
-            tentativasHierarquia.push({ ownerEntityType: "ACCOUNT", ownerEntity: ak, accountKey: ak });
-            tentativasHierarquia.push({ ownerEntityType: "ORGANIZATION", ownerEntity: ak, accountKey: ak });
-        }
+        historico.push(`[3] Identificadores de Org para teste: ${orgsUnicas.join(', ')}`);
 
         let subDados = null;
         let erroFinal = "";
 
-        for (const tent of tentativasHierarquia) {
-            historico.push(`[3] Tentando Conta ${tent.accountKey} como ${tent.ownerEntityType}...`);
-            const subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
-                method: 'POST',
-                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    accountKey: tent.accountKey,
-                    ownerEntity: tent.ownerEntity,
-                    ownerEntityType: tent.ownerEntityType,
-                    channelId: channelId,
-                    eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE", "DELIVERY_STATUS"]
-                })
-            });
+        // Testa combinações de Org e AccountKey
+        for (const ak of accountKeys) {
+            for (const org of orgsUnicas) {
+                historico.push(`[3] Testando Account: ${ak} | Owner: ${org} ...`);
+                
+                const subResp = await fetch('https://api.goto.com/messaging/v2/subscriptions', {
+                    method: 'POST',
+                    headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        accountKey: ak,
+                        ownerEntity: org,
+                        ownerEntityType: "ORGANIZATION",
+                        channelId: channelId,
+                        eventTypes: ["INBOUND_MESSAGE", "OUTBOUND_MESSAGE"]
+                    })
+                });
 
-            const subTexto = await subResp.text();
-            
-            if (subResp.ok) {
-                try { subDados = JSON.parse(subTexto); } catch(e) { subDados = { info: "OK" }; }
-                historico.push(`[3] SUCESSO ABSOLUTO! Registrado na Conta ${tent.accountKey} como ${tent.ownerEntityType}!`);
-                break; // Paramos de testar porque funcionou!
-            } else {
-                erroFinal = subTexto;
-                historico.push(`[3] Negado (${subResp.status})`);
+                const subTexto = await subResp.text();
+
+                if (subResp.ok) {
+                    try { subDados = JSON.parse(subTexto); } catch(e) { subDados = { info: "Assinatura OK" }; }
+                    historico.push(`[3] SUCESSO ABSOLUTO! Registrado com Account: ${ak} e Org: ${org}!`);
+                    break;
+                } else {
+                    erroFinal = subTexto;
+                    historico.push(`[3] Falha (${subResp.status}): ${subTexto.replace(/\s+/g, ' ').slice(0, 160)}`);
+                }
             }
+            if (subDados) break;
         }
 
         if (!subDados) {
-            throw new Error(`Canal OK (${channelId}), mas todas as assinaturas falharam.\nÚltimo erro: ${erroFinal}`);
+            throw new Error(`Canal OK (${channelId}), mas todas as tentativas de assinatura falharam.\nÚltimo detalhe: ${erroFinal}`);
         }
 
         res.json({
             sucesso: true,
-            mensagem: "Webhook e Assinatura registrados com SUCESSO ABSOLUTO na GoTo!",
+            mensagem: "Webhook e Assinatura registrados com SUCESSO na GoTo!",
             channelId: channelId,
             webhookUrlUtilizada: webhookUrl,
             assinatura: subDados,
