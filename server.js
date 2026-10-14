@@ -69,7 +69,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. SETUP AUTOMÁTICO INTELIGENTE
+// 3. SETUP AUTOMÁTICO COM DIAGNÓSTICO E SUPORTE A OGN
 // ==========================================
 app.get('/api/setup-webhook', async (req, res) => {
     const historico = [];
@@ -99,12 +99,12 @@ app.get('/api/setup-webhook', async (req, res) => {
                 
                 if (existente) {
                     channelId = existente.channelId || existente.id;
-                    historico.push(`[1] Canal existente encontrado: ${channelId}`);
+                    historico.push(`[1] Canal ativo reaproveitado: ${channelId}`);
                 }
             }
         } catch (e) {}
 
-        // ETAPA 2: Se não houver, cria na rota oficial
+        // ETAPA 2: Criar se não existir
         if (!channelId) {
             historico.push(`[2] Criando canal oficial para Webhook: ${webhookUrl}`);
             const canalResp = await fetch('https://api.goto.com/notification-channel/v1/channels/webhook', {
@@ -123,35 +123,42 @@ app.get('/api/setup-webhook', async (req, res) => {
             }
         }
 
-        // ETAPA 3: Decodificar todas as informações de Org e Contas do JWT
+        // ETAPA 3: Decodificar o JWT (extraindo ogn, sc, sub)
         let jwtClaims = {};
         try {
             const payloadBase64 = token.split('.')[1];
             jwtClaims = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf-8'));
-            historico.push(`[3] Claims do Token: ${JSON.stringify(Object.keys(jwtClaims))}`);
-        } catch(e) {}
+            historico.push(`[3] JWT decodificado com sucesso.`);
+        } catch(e) {
+            historico.push(`[3] Falha na leitura do payload JWT.`);
+        }
+
+        // O claim 'ogn' é a chave da organização real da GoTo
+        const orgIdReal = jwtClaims.ogn ? String(jwtClaims.ogn) : null;
+        const escoposToken = jwtClaims.sc || [];
+        const usuarioSub = jwtClaims.sub || null;
 
         const orgCandidatos = [
-            jwtClaims.org_id,
-            jwtClaims.organization_id,
-            jwtClaims.organizationId,
-            jwtClaims.orgId,
-            jwtClaims.account_key,
+            orgIdReal,
             "5363286181559338501",
             "4055072950408524550"
         ].filter(Boolean);
 
-        // Remover duplicados mantendo a ordem
         const orgsUnicas = [...new Set(orgCandidatos)];
-        const accountKeys = ["5363286181559338501", "4055072950408524550"];
+        const accountKeys = [
+            "5363286181559338501", 
+            "4055072950408524550",
+            orgIdReal
+        ].filter(Boolean);
+        const accountKeysUnicas = [...new Set(accountKeys)];
 
-        historico.push(`[3] Identificadores de Org para teste: ${orgsUnicas.join(', ')}`);
+        historico.push(`[3] Identificadores de Org testados: ${orgsUnicas.join(', ')}`);
 
         let subDados = null;
         let erroFinal = "";
 
-        // Testa combinações de Org e AccountKey
-        for (const ak of accountKeys) {
+        // Testar as combinações possíveis de Account e Owner com o 'ogn' identificado
+        for (const ak of accountKeysUnicas) {
             for (const org of orgsUnicas) {
                 historico.push(`[3] Testando Account: ${ak} | Owner: ${org} ...`);
                 
@@ -175,19 +182,30 @@ app.get('/api/setup-webhook', async (req, res) => {
                     break;
                 } else {
                     erroFinal = subTexto;
-                    historico.push(`[3] Falha (${subResp.status}): ${subTexto.replace(/\s+/g, ' ').slice(0, 160)}`);
+                    historico.push(`[3] Falha (${subResp.status}): ${subTexto.replace(/\s+/g, ' ').slice(0, 140)}`);
                 }
             }
             if (subDados) break;
         }
 
         if (!subDados) {
-            throw new Error(`Canal OK (${channelId}), mas todas as tentativas de assinatura falharam.\nÚltimo detalhe: ${erroFinal}`);
+            return res.status(403).json({
+                sucesso: false,
+                mensagem: "Canal criado com sucesso, mas a GoTo recusou a permissão de assinatura.",
+                diagnostico_permissoes: {
+                    organizacao_identificada_ogn: orgIdReal,
+                    usuario_sub: usuarioSub,
+                    escopos_presentes_sc: escoposToken,
+                    ultimo_erro_goto: erroFinal
+                },
+                channelId: channelId,
+                historicoExecucao: historico
+            });
         }
 
         res.json({
             sucesso: true,
-            mensagem: "Webhook e Assinatura registrados com SUCESSO na GoTo!",
+            mensagem: "Webhook e Assinatura registrados com SUCESSO ABSOLUTO na GoTo!",
             channelId: channelId,
             webhookUrlUtilizada: webhookUrl,
             assinatura: subDados,
