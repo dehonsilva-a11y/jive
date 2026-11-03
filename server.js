@@ -10,6 +10,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// ==========================================
+// 1. CONFIGURAÇÕES & SEGURANÇA
+// ==========================================
 const gemini_key = process.env.GEMINI_KEY || "";
 const ai = new GoogleGenAI({ apiKey: gemini_key });
 
@@ -26,32 +29,53 @@ const HEADERS_API = {
     'User-Agent': 'GoTo-Webhook-Client/1.0'
 };
 
-// Lê do data/goto_config.json caso não esteja configurado na Vercel
-function obterCredenciais() {
+// Fallbacks seguros de credenciais da aplicação GoTo
+const PADRAO_CLIENT_ID = "3253a422-73e1-4585-af2e-590f6111d494";
+const PADRAO_CLIENT_SECRET = "0Odvtk0b8xMFAATgpluKt0C1";
+
+function obterCredenciais(req = null) {
     let local = {};
-    const caminhoConfig = path.join(process.cwd(), 'data', 'goto_config.json');
-    if (fs.existsSync(caminhoConfig)) {
-        try { local = JSON.parse(fs.readFileSync(caminhoConfig, 'utf-8')); } catch (e) {}
+    const caminhos = [
+        path.join(process.cwd(), 'data', 'goto_config.json'),
+        path.join(__dirname, 'data', 'goto_config.json'),
+        path.join(process.cwd(), 'goto_config.json')
+    ];
+
+    for (const p of caminhos) {
+        if (fs.existsSync(p)) {
+            try { 
+                local = JSON.parse(fs.readFileSync(p, 'utf-8')); 
+                break;
+            } catch (e) {}
+        }
     }
 
-    return {
-        clientId: process.env.GOTO_CLIENT_ID || local.client_id,
-        clientSecret: process.env.GOTO_CLIENT_SECRET || local.client_secret,
-        refreshToken: gotoTokenCache.refreshToken || process.env.GOTO_REFRESH_TOKEN || local.refresh_token
-    };
+    const querySecret = req?.query?.secret || req?.query?.client_secret;
+    const queryClientId = req?.query?.client_id;
+
+    const clientId = (queryClientId || process.env.GOTO_CLIENT_ID || local.client_id || PADRAO_CLIENT_ID).trim();
+    const clientSecret = (querySecret || process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
+    const refreshToken = (gotoTokenCache.refreshToken || process.env.GOTO_REFRESH_TOKEN || local.refresh_token || "").trim();
+
+    return { clientId, clientSecret, refreshToken };
 }
 
 // ==========================================
-// ROTA AUTOMÁTICA: TROCAR CODE POR REFRESH_TOKEN
+// 2. ROTA AUTOMÁTICA: TROCAR CODE POR REFRESH_TOKEN
 // ==========================================
 app.get('/api/gerar-token', async (req, res) => {
     try {
-        const code = req.query.code;
+        let code = req.query.code;
         if (!code) {
-            return res.status(400).send("Falta o parametro ?code= na URL.");
+            return res.status(400).json({ sucesso: false, erro: "Falta o parametro ?code= na URL." });
         }
 
-        const { clientId, clientSecret } = obterCredenciais();
+        if (code.includes('code=')) {
+            code = code.split('code=')[1].split('&')[0];
+        }
+        code = decodeURIComponent(code).trim();
+
+        const { clientId, clientSecret } = obterCredenciais(req);
         const redirectUri = "http://localhost:3000/callback";
         const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
@@ -64,7 +88,7 @@ app.get('/api/gerar-token', async (req, res) => {
             },
             body: new URLSearchParams({
                 grant_type: 'authorization_code',
-                code: code.trim(),
+                code: code,
                 redirect_uri: redirectUri
             })
         });
@@ -77,23 +101,37 @@ app.get('/api/gerar-token', async (req, res) => {
             return res.status(resposta.status).json({
                 sucesso: false,
                 mensagem: "A GoTo rejeitou o code.",
+                credenciais_utilizadas: {
+                    client_id: clientId,
+                    secret_preview: `${clientSecret.slice(0, 3)}...${clientSecret.slice(-3)} (tam: ${clientSecret.length})`,
+                    redirect_uri: redirectUri
+                },
                 detalhe: dados
             });
         }
 
+        // Armazena imediatamente em memória para uso imediato das outras rotas
+        gotoTokenCache.token = dados.access_token;
+        gotoTokenCache.expiraEm = Date.now() + (dados.expires_in * 1000);
+        if (dados.refresh_token) {
+            gotoTokenCache.refreshToken = dados.refresh_token;
+        }
+
         res.json({
             sucesso: true,
-            mensagem: "Copie o refresh_token abaixo e cole na linha 5 do seu goto_config.json:",
+            mensagem: "Refresh Token obtido e ativado com sucesso!",
+            instrucao: "Cole este refresh_token na linha 5 do seu data/goto_config.json e na variável GOTO_REFRESH_TOKEN da Vercel:",
             refresh_token: dados.refresh_token,
-            access_token: dados.access_token
+            access_token: dados.access_token,
+            expira_em_segundos: dados.expires_in
         });
     } catch (e) {
-        res.status(500).json({ erro: e.message });
+        res.status(500).json({ sucesso: false, erro: e.message });
     }
 });
 
 // ==========================================
-// AUTENTICAÇÃO OAUTH 2.0
+// 3. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO)
 // ==========================================
 async function obterTokenGoTo() {
     const agora = Date.now();
@@ -104,7 +142,7 @@ async function obterTokenGoTo() {
     const { clientId, clientSecret, refreshToken } = obterCredenciais();
 
     if (!clientId || !clientSecret || !refreshToken) {
-        throw new Error("Credenciais GoTo ausentes (verifique variáveis de ambiente ou goto_config.json).");
+        throw new Error("Credenciais GoTo ausentes (verifique GOTO_REFRESH_TOKEN ou execute /api/gerar-token).");
     }
 
     const credenciaisBase64 = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -119,7 +157,10 @@ async function obterTokenGoTo() {
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken })
     });
 
-    if (!resposta.ok) throw new Error(`Falha na autenticacao GoTo: ${await resposta.text()}`);
+    if (!resposta.ok) {
+        const erroMsg = await resposta.text();
+        throw new Error(`Falha na autenticacao GoTo: ${erroMsg}`);
+    }
 
     const dados = await resposta.json();
     gotoTokenCache.token = dados.access_token;
@@ -130,7 +171,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// CONSULTA DE TEMPLATES & CANAIS DE MENSAGENS
+// 4. CONSULTA DE TEMPLATES & CANAIS DE MENSAGENS
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
     const resultados = [];
@@ -183,7 +224,155 @@ app.get('/api/check-templates', async (req, res) => {
     }
 });
 
-app.post('/webhook', (req, res) => res.status(200).json({ sucesso: true }));
+// ==========================================
+// 5. OUVINTE DO WEBHOOK
+// ==========================================
+app.post('/webhook', (req, res) => {
+    try {
+        const evento = req.body;
+        if (!evento || evento.source !== 'inbox-notification') return res.status(200).send("Ignorado.");
+
+        const tipo = evento.type;
+        const payload = evento.content?.payload;
+        if (!payload || !payload.conversationId) return res.status(200).send("Ignorado.");
+
+        const convId = payload.conversationId;
+
+        if (!bancoDeConversas.has(convId)) {
+            bancoDeConversas.set(convId, {
+                id: convId,
+                fila: `WhatsApp Contact Center`,
+                consultor: payload.authorTouchpoint || "Equipe",
+                startTime: evento.timestamp,
+                status: 'ABERTA',
+                mensagens: []
+            });
+        }
+
+        const conversa = bancoDeConversas.get(convId);
+
+        if (tipo === 'INBOUND_MESSAGE' || tipo === 'OUTBOUND_MESSAGE') {
+            conversa.mensagens.push({
+                origem: tipo === 'INBOUND_MESSAGE' ? 'cliente' : 'consultor',
+                texto: payload.body || "[Mídia/Anexo]",
+                hora: payload.timestamp || evento.timestamp
+            });
+        }
+
+        if (tipo === 'CONVERSATION_CLOSED' || payload.status === 'CLOSED') {
+            conversa.status = 'FECHADA';
+        }
+
+        res.status(200).json({ sucesso: true });
+    } catch (e) {
+        res.status(500).send("Erro interno no webhook.");
+    }
+});
+
+// ==========================================
+// 6. CÁLCULOS & IA PARA O DASHBOARD
+// ==========================================
+function calcularMinutos(inicio, fim) {
+    if (!inicio || !fim) return null;
+    return Math.max(0, Math.round((new Date(fim) - new Date(inicio)) / 60000));
+}
+
+function calcularTMR(mensagens) {
+    let tempos = [];
+    let ultimaMsgCliente = null;
+    const msgsOrdenadas = [...mensagens].sort((a, b) => new Date(a.hora) - new Date(b.hora));
+
+    for (const msg of msgsOrdenadas) {
+        if (msg.origem === 'cliente' && msg.hora) ultimaMsgCliente = new Date(msg.hora);
+        else if (msg.origem === 'consultor' && ultimaMsgCliente && msg.hora) {
+            tempos.push(Math.max(0, Math.round((new Date(msg.hora) - ultimaMsgCliente) / 60000)));
+            ultimaMsgCliente = null;
+        }
+    }
+    return tempos.length === 0 ? null : Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length);
+}
+
+const esquemaIA = {
+    type: Type.OBJECT,
+    properties: {
+        assunto_resumido: { type: Type.STRING, description: "Motivo do contato em até 4 palavras" },
+        sentimento_inferido: { type: Type.STRING, description: "Satisfeito, Neutro ou Insatisfeito" }
+    },
+    required: ["assunto_resumido", "sentimento_inferido"]
+};
+
+// ==========================================
+// 7. ROTA DO DASHBOARD
+// ==========================================
+app.get('/api/dashboard', async (req, res) => {
+    try {
+        let conversasArray = Array.from(bancoDeConversas.values());
+
+        // Contingência para exibir dados na interface caso ainda não haja mensagens via Webhook
+        if (conversasArray.length === 0) {
+            const caminhoMock = path.join(process.cwd(), 'data', 'conversas_mock.json');
+            if (fs.existsSync(caminhoMock)) {
+                try {
+                    const mock = JSON.parse(fs.readFileSync(caminhoMock, 'utf-8'));
+                    conversasArray = Array.isArray(mock) ? mock : (mock.conversas || []);
+                } catch (e) {}
+            }
+        }
+
+        const dadosTratados = await Promise.all(conversasArray.map(async (c) => {
+            const mensagens = c.mensagens || [];
+            const inicio = c.startTime || new Date().toISOString();
+            
+            const primeiraResposta = mensagens.find(m => m.origem === 'consultor')?.hora;
+            const conclusao = c.status === 'FECHADA' ? mensagens[mensagens.length - 1]?.hora : null;
+
+            const tme = calcularMinutos(inicio, primeiraResposta);
+            const tma = calcularMinutos(primeiraResposta, conclusao);
+            const tmr = calcularTMR(mensagens);
+            const pendente = mensagens[mensagens.length - 1]?.origem === 'cliente';
+
+            const chaveCache = `${c.id}_${mensagens.length}`;
+            let semantica = cacheAnalisesIA.get(chaveCache);
+
+            if (!semantica) {
+                if (gemini_key && mensagens.length > 0 && mensagens.some(m => m.texto && m.texto.trim() !== "")) {
+                    try {
+                        const prompt = `Analise a conversa:\n${mensagens.map(m => `${m.origem}:${m.texto}`).join('\n')}`;
+                        const response = await ai.models.generateContent({
+                            model: 'gemini-3.8-flash', contents: prompt,
+                            config: { responseMimeType: "application/json", responseSchema: esquemaIA, temperature: 0.1 }
+                        });
+                        semantica = JSON.parse(response.text);
+                    } catch (errIA) {
+                        semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
+                    }
+                } else {
+                    semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
+                }
+                cacheAnalisesIA.set(chaveCache, semantica);
+            }
+
+            return {
+                id: c.id, 
+                data: inicio.split('T')[0], 
+                fila: c.fila || "WhatsApp", 
+                consultor: c.consultor || "Consultor",
+                tme_val: tme, tma_val: tma, tmr_val: tmr, nota_goto: null,
+                tme_texto: tme !== null ? `${tme} min` : "Na fila",
+                tma_texto: tma !== null ? `${tma} min` : "Em Andamento",
+                tmr_texto: tmr !== null ? `${tmr} min` : "N/D",
+                status: pendente ? "Pendente" : "Respondido",
+                assunto: semantica.assunto_resumido, 
+                qualidade_resumo: semantica.sentimento_inferido
+            };
+        }));
+
+        res.json({ sucesso: true, dados: dadosTratados, origem: "servidor_vercel" });
+    } catch (erro) {
+        res.status(500).json({ sucesso: false, erro: erro.message });
+    }
+});
+
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 export default app;
