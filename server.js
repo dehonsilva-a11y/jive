@@ -69,7 +69,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. CONSULTA DE TEMPLATES DE MENSAGEM (WHATSAPP)
+// 3. CONSULTA DE TEMPLATES & CANAIS DE MENSAGENS
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
     const resultados = [];
@@ -77,46 +77,50 @@ app.get('/api/check-templates', async (req, res) => {
         const token = await obterTokenGoTo();
         const accountKeys = ["5363286181559338501", "4055072950408524550"];
 
+        // Relação de endpoints para templates v2 e canais digitais
+        const rotasParaTestar = [
+            'https://api.goto.com/messaging/v2/templates',
+            'https://api.goto.com/messaging/v2/channels',
+            'https://api.goto.com/messaging/v1/channels'
+        ];
+
         for (const ak of accountKeys) {
-            const rotasParaTestar = [
-                `https://api.goto.com/messaging/v1/templates?accountKey=${ak}`,
-                `https://api.goto.com/messaging/v1/accounts/${ak}/templates`
-            ];
+            rotasParaTestar.push(`https://api.goto.com/messaging/v2/templates?accountKey=${ak}`);
+            rotasParaTestar.push(`https://api.goto.com/messaging/v2/accounts/${ak}/templates`);
+            rotasParaTestar.push(`https://api.goto.com/messaging/v1/channels?accountKey=${ak}`);
+        }
 
-            for (const url of rotasParaTestar) {
-                try {
-                    const resp = await fetch(url, {
-                        method: 'GET',
-                        headers: {
-                            ...HEADERS_API,
-                            'Authorization': `Bearer ${token}`
-                        }
-                    });
+        for (const url of rotasParaTestar) {
+            try {
+                const resp = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        ...HEADERS_API,
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
 
-                    const texto = await resp.text();
-                    let dadosJson = null;
-                    try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
+                const texto = await resp.text();
+                let dadosJson = null;
+                try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
 
-                    resultados.push({
-                        accountKey: ak,
-                        urlConsultada: url,
-                        status: resp.status,
-                        autorizado: resp.ok,
-                        resposta: dadosJson
-                    });
-                } catch (err) {
-                    resultados.push({
-                        accountKey: ak,
-                        urlConsultada: url,
-                        erro: err.message
-                    });
-                }
+                resultados.push({
+                    urlConsultada: url,
+                    status: resp.status,
+                    autorizado: resp.ok,
+                    resposta: dadosJson
+                });
+            } catch (err) {
+                resultados.push({
+                    urlConsultada: url,
+                    erro: err.message
+                });
             }
         }
 
         res.json({
             sucesso: true,
-            escopos_confirmados_no_token: ["messaging.v1.send", "messaging.v1.write", "messaging.v1.read"],
+            escopos_token: ["messaging.v1.send", "messaging.v1.write", "messaging.v1.read"],
             testes: resultados
         });
 
