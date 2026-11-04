@@ -59,12 +59,9 @@ function obterCredenciais(req = null) {
         }
     }
 
-    const querySecret = req?.query?.secret || req?.query?.client_secret;
-    const queryClientId = req?.query?.client_id;
-
-    const clientId = (queryClientId || process.env.GOTO_CLIENT_ID || local.client_id || PADRAO_CLIENT_ID).trim();
-    const clientSecret = (querySecret || process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
-    const channelId = (req?.query?.channelId || local.channel_id || PADRAO_CHANNEL_ID).trim();
+    const clientId = (process.env.GOTO_CLIENT_ID || local.client_id || PADRAO_CLIENT_ID).trim();
+    const clientSecret = (process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
+    const channelId = (local.channel_id || PADRAO_CHANNEL_ID).trim();
 
     let refreshToken = PADRAO_REFRESH_TOKEN;
     const candidatos = [
@@ -113,80 +110,82 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// CONSULTA OFICIAL COM OWNER TOUCHPOINT & DESCOBERTA DE CANAIS
+// RASTREAMENTO DA CAIXA E BUSCA DE TEMPLATES
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
-    const resultados = [];
     try {
         const token = await obterTokenGoTo();
         const { channelId } = obterCredenciais(req);
-        const touchpointParam = req.query.ownerTouchpoint || channelId;
+        const accountKeys = ["5363286181559338501", "4055072950408524550"];
 
-        // 1. Identificar o usuário e a conta oficial pelo endpoint /users/v1/me
-        let contaIdentificada = null;
+        // 1. Descoberta das Caixas de Entrada (Inbox) e Canais cadastrados
+        let dadosInboxes = null;
+        let dadosCanaisInbox = null;
+
         try {
-            const respMe = await fetch('https://api.goto.com/users/v1/me', {
+            const respInboxes = await fetch('https://api.goto.com/inbox/v1/inboxes', {
                 headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
             });
-            if (respMe.ok) {
-                contaIdentificada = await respMe.json();
-            }
+            if (respInboxes.ok) dadosInboxes = await respInboxes.json();
         } catch (e) {}
 
-        const accountKeys = [
-            contaIdentificada?.accountKey,
-            "5363286181559338501",
-            "4055072950408524550"
-        ].filter(Boolean);
+        try {
+            const respCanais = await fetch('https://api.goto.com/inbox/v1/channels', {
+                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
+            });
+            if (respCanais.ok) dadosCanaisInbox = await respCanais.json();
+        } catch (e) {}
 
-        const accountKeysUnicas = [...new Set(accountKeys)];
+        // 2. Variações do touchpoint para testar na API de Templates
+        // Testamos o número com DDI, número limpo, número com '+', e o channel_id UUID
+        const touchpointsParaTestar = [
+            "551151992000",
+            "+551151992000",
+            "1151992000",
+            channelId
+        ];
 
-        // 2. Montar as rotas passando o ownerTouchpoint obrigatório e rotas de descoberta de canais
-        const rotasParaTestar = [];
+        const testesTemplates = [];
 
-        for (const ak of accountKeysUnicas) {
-            // Chamada oficial do Step 1 com ownerTouchpoint
-            rotasParaTestar.push({ tipo: 'Templates (ownerTouchpoint)', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?ownerTouchpoint=${touchpointParam}` });
-            
-            // Rotas de listagem para descobrir IDs numéricos de touchpoints cadastrados
-            rotasParaTestar.push({ tipo: 'Descoberta Touchpoints', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/touchpoints` });
-            rotasParaTestar.push({ tipo: 'Descoberta Channels', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/channels` });
-        }
+        for (const ak of accountKeys) {
+            for (const tp of touchpointsParaTestar) {
+                const url = `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?ownerTouchpoint=${encodeURIComponent(tp)}`;
+                try {
+                    const resp = await fetch(url, {
+                        headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
+                    });
 
-        for (const item of rotasParaTestar) {
-            try {
-                const resp = await fetch(item.url, {
-                    method: 'GET',
-                    headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
-                });
+                    const texto = await resp.text();
+                    let dadosJson = null;
+                    try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
 
-                const texto = await resp.text();
-                let dadosJson = null;
-                try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
-
-                resultados.push({
-                    finalidade: item.tipo,
-                    accountKey: item.ak,
-                    urlConsultada: item.url,
-                    status: resp.status,
-                    autorizado: resp.ok,
-                    resposta: dadosJson
-                });
-            } catch (err) {
-                resultados.push({
-                    finalidade: item.tipo,
-                    accountKey: item.ak,
-                    urlConsultada: item.url,
-                    erro: err.message
-                });
+                    if (resp.ok) {
+                        testesTemplates.push({
+                            accountKey: ak,
+                            touchpoint_valido: tp,
+                            status: resp.status,
+                            templates: dadosJson
+                        });
+                    } else if (resp.status !== 404) {
+                        // Registra se retornar algo diferente de 404 (como erro de validação ou permissão específica)
+                        testesTemplates.push({
+                            accountKey: ak,
+                            touchpoint_testado: tp,
+                            status: resp.status,
+                            resposta: dadosJson
+                        });
+                    }
+                } catch (e) {}
             }
         }
 
         res.json({
             sucesso: true,
-            usuario_me: contaIdentificada ? { nome: contaIdentificada.name, email: contaIdentificada.email, accountKey: contaIdentificada.accountKey } : "Nao retornado",
-            ownerTouchpoint_testado: touchpointParam,
-            testes: resultados
+            caixa_procurada: "Relacionamento de Locação",
+            telefone_base: "+55 11 5199 2000",
+            inboxes_encontradas: dadosInboxes,
+            canais_inbox_encontrados: dadosCanaisInbox,
+            templates_descobertos: testesTemplates
         });
 
     } catch (erro) {
@@ -200,10 +199,17 @@ app.get('/api/check-templates', async (req, res) => {
 app.post('/api/enviar-mensagem', async (req, res) => {
     try {
         const token = await obterTokenGoTo();
-        const { accountKey = "5363286181559338501", fromPhoneId, to, texto, templateName, templateParams = {} } = req.body;
+        const { 
+            accountKey = "5363286181559338501", 
+            fromPhoneId = "551151992000", 
+            to, 
+            texto, 
+            templateName, 
+            templateParams = [] 
+        } = req.body;
 
         if (!to) {
-            return res.status(400).json({ erro: "Destinatario 'to' obrigatorio em formato E.164 (ex: +5511999999999)" });
+            return res.status(400).json({ erro: "Campo 'to' obrigatorio (ex: +5511999999999)." });
         }
 
         let requestObj = {
@@ -216,7 +222,7 @@ app.post('/api/enviar-mensagem', async (req, res) => {
             requestObj.type = "template";
             requestObj.template = {
                 name: templateName,
-                ...templateParams
+                parameters: templateParams
             };
         } else {
             requestObj.type = "simple";
@@ -226,7 +232,7 @@ app.post('/api/enviar-mensagem', async (req, res) => {
                     components: [
                         {
                             type: "text",
-                            attributes: { text: texto || "Olá! Como podemos ajudar?" }
+                            attributes: { text: texto || "Olá! Contato da equipe de Relacionamento de Locação." }
                         }
                     ]
                 }
