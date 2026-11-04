@@ -29,15 +29,11 @@ const HEADERS_API = {
     'User-Agent': 'GoTo-Webhook-Client/1.0'
 };
 
-// Credenciais oficiais validadas da GoTo
 const PADRAO_CLIENT_ID = "3253a422-73e1-4585-af2e-590f6111d494";
 const PADRAO_CLIENT_SECRET = "pBn8JYvMPlJz7mk9XgIuHO3p";
 const PADRAO_CHANNEL_ID = "49889407-3cc9-47b1-b33d-afa97956e162";
-
-// Refresh Token oficial gerado e ativo (typ: "r")
 const PADRAO_REFRESH_TOKEN = "eyJraWQiOiI2MjAiLCJhbGciOiJSUzUxMiJ9.eyJzYyI6ImNhbGwtY29udHJvbC52MS5jYWxscy5jb250cm9sIGFzc2V0LnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIGNhbGxzLnYyLmluaXRpYXRlIG1lc3NhZ2luZy52MS53cml0ZSBpZGVudGl0eTpzY2ltLm1lIGNhbGwtZXZlbnRzLnYxLmV2ZW50cy5yZWFkIGNjLWFuYWx5dGljcy52MS5hZ2VudC1zdGF0dXMucmVhZCB1c2Vycy52MS5yZWFkIG1lc3NhZ2luZy52MS5ub3RpZmljYXRpb25zLm1hbmFnZSB2b2ljZW1haWwudjEubm90aWZpY2F0aW9ucy5tYW5hZ2UgY2FsbC1wYXJraW5nLnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIHZvaWNlbWFpbC52MS52b2ljZW1haWxzLndyaXRlIHN1cHBvcnQ6IHJlY29yZGluZy52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBmYXgudjEud3JpdGUgdm9pY2UtYWRtaW4udjEud3JpdGUgd2VicnRjLnYxLndyaXRlIHdlYnJ0Yy52MS5yZWFkIGlkZW50aXR5OiBjb2xsYWI6IHF1ZXVlLWNhbGxlci52MS5yZWFkIHZvaWNlLWFkbWluLnYxLnJlYWQgcHJlc2VuY2UudjEucmVhZCBjb250YWN0cy52MS5yZWFkIHJlY29yZGluZy52MS5yZWFkIGNhbGwtZXZlbnRzLnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIGlkZW50aXR5OnNjaW0ub3JnIHByZXNlbmNlLnYxLndyaXRlIGZheC52MS5yZWFkIGNvbnRhY3RzLnYxLndyaXRlIGNhbGwtaGlzdG9yeS52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBwcmVzZW5jZS52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBtZXNzYWdpbmcudjEuc2VuZCBjYWxsLXBhcmtpbmcudjEucmVhZCBtZXNzYWdpbmcudjEucmVhZCBjci52MS5yZWFkIGZheC52MS5ub3RpZmljYXRpb25zLm1hbmFnZSB1c2Vycy52MS5saW5lcy5yZWFkIHZvaWNlbWFpbC52MS52b2ljZW1haWxzLnJlYWQiLCJzdWIiOiIyMjgyNDI0OTE2MDUzMDAzMDIwIiwiYXVkIjoiMzI1M2E0MjItNzNlMS00NTg1LWFmMmUtNTkwZjYxMTFkNDk0Iiwib2duIjoicHdkIiwidHlwIjoiciIsImxldmVsT2ZBc3N1cmFuY2UiOjIsImV4cCI6MTc5NjMzMTkzOCwiaWF0IjoxNzkzNzM5OTM4LCJqdGkiOiIyNTZjY2NiZC0zMTU3LTQ4YzItOTgwOC0zNGQ4YzYyYmZhN2YifQ.m6ztojoArZN69JzCJNFAeG-C7FSWOazUHGpzfImusBXmg3efOFhLHh473H9JnWhlv4Oj3tE7ugqi_fEnzVhIVmaW1YhdVOU0Ja5o49fmxAtB919k2hvL1i1Ce9W2h-39Hh7KLkzcKHmLefKskZiEMvEFfyMSxAVQ7oQhsDXhSBFFW4jbXtnBRwbmwW3fWD01-E6-TmgfMiWio-wcOOJH-fliOTOaU2EsaqXzZ4ucxc1Ib5ucFKaJR9YaVnxf4KGI72gQ6kSpWwKboIHQWI3ltvMCgNNvdj_pnORk0xK737GNwattOYF716gVMOZxzlPfiEa0NysodEBxkvHZTcaXUw";
 
-// Validador de formato: garante que o token seja do tipo 'refresh' (typ: "r") e não um 'code' (typ: "c")
 function ehRefreshTokenValido(tok) {
     if (!tok || typeof tok !== 'string') return false;
     try {
@@ -73,7 +69,6 @@ function obterCredenciais(req = null) {
     const clientSecret = (querySecret || process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
     const channelId = (local.channel_id || PADRAO_CHANNEL_ID).trim();
 
-    // Seleciona o primeiro refresh_token comprovadamente válido (typ: 'r')
     let refreshToken = PADRAO_REFRESH_TOKEN;
     const candidatos = [
         gotoTokenCache.refreshToken,
@@ -92,75 +87,7 @@ function obterCredenciais(req = null) {
 }
 
 // ==========================================
-// 2. ROTA AUTOMÁTICA: TROCAR CODE POR REFRESH_TOKEN
-// ==========================================
-app.get('/api/gerar-token', async (req, res) => {
-    try {
-        let code = req.query.code;
-        if (!code) {
-            return res.status(400).json({ sucesso: false, erro: "Falta o parametro ?code= na URL." });
-        }
-
-        if (code.includes('code=')) {
-            code = code.split('code=')[1].split('&')[0];
-        }
-        code = decodeURIComponent(code).trim();
-
-        const { clientId, clientSecret } = obterCredenciais(req);
-        const redirectUri = "http://localhost:3000/callback";
-        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-
-        const resposta = await fetch('https://authentication.logmeininc.com/oauth/token', {
-            method: 'POST',
-            headers: {
-                ...HEADERS_API,
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: new URLSearchParams({
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: redirectUri
-            })
-        });
-
-        const texto = await resposta.text();
-        let dados;
-        try { dados = JSON.parse(texto); } catch (e) { dados = texto; }
-
-        if (!resposta.ok) {
-            return res.status(resposta.status).json({
-                sucesso: false,
-                mensagem: "A GoTo rejeitou o code.",
-                credenciais_utilizadas: {
-                    client_id: clientId,
-                    secret_preview: `${clientSecret.slice(0, 3)}...${clientSecret.slice(-3)} (tam: ${clientSecret.length})`,
-                    redirect_uri: redirectUri
-                },
-                detalhe: dados
-            });
-        }
-
-        gotoTokenCache.token = dados.access_token;
-        gotoTokenCache.expiraEm = Date.now() + (dados.expires_in * 1000);
-        if (dados.refresh_token) {
-            gotoTokenCache.refreshToken = dados.refresh_token;
-        }
-
-        res.json({
-            sucesso: true,
-            mensagem: "Refresh Token obtido e ativado com sucesso!",
-            refresh_token: dados.refresh_token,
-            access_token: dados.access_token,
-            expira_em_segundos: dados.expires_in
-        });
-    } catch (e) {
-        res.status(500).json({ sucesso: false, erro: e.message });
-    }
-});
-
-// ==========================================
-// 3. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO AUTOMÁTICA)
+// 2. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO AUTOMÁTICA)
 // ==========================================
 async function obterTokenGoTo() {
     const agora = Date.now();
@@ -169,7 +96,6 @@ async function obterTokenGoTo() {
     }
 
     const { clientId, clientSecret, refreshToken } = obterCredenciais();
-
     const credenciaisBase64 = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
     const resposta = await fetch('https://authentication.logmeininc.com/oauth/token', {
@@ -196,30 +122,31 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 4. CONSULTA DE TEMPLATES & CANAIS DE MENSAGENS
+// 3. CONSULTA OFICIAL DE TEMPLATES (MESSAGING V2 GUIDE)
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
     const resultados = [];
     try {
         const token = await obterTokenGoTo();
-        const { channelId: configChannelId } = obterCredenciais();
-        const channelId = req.query.channelId || configChannelId || PADRAO_CHANNEL_ID;
+        const accountKeys = ["5363286181559338501", "4055072950408524550"];
 
-        const rotasParaTestar = [
-            `https://api.goto.com/messaging/v1/channels/${channelId}`,
-            `https://api.goto.com/messaging/v2/channels/${channelId}`,
-            `https://api.goto.com/messaging/v1/channels/${channelId}/templates`,
-            `https://api.goto.com/messaging/v2/channels/${channelId}/templates`,
-            `https://api.goto.com/messaging/v1/templates?channelId=${channelId}`,
-            `https://api.goto.com/messaging/v2/templates?channelId=${channelId}`,
-            'https://api.goto.com/messaging/v1/channels'
-        ];
+        // Endpoints oficiais conforme a documentação de Messaging v2
+        const rotasParaTestar = [];
 
-        for (const url of rotasParaTestar) {
+        for (const ak of accountKeys) {
+            // Rota exata do Step 1 da documentação
+            rotasParaTestar.push({ ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates` });
+            rotasParaTestar.push({ ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?channel=WHATSAPP` });
+        }
+
+        for (const item of rotasParaTestar) {
             try {
-                const resp = await fetch(url, {
+                const resp = await fetch(item.url, {
                     method: 'GET',
-                    headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
+                    headers: {
+                        ...HEADERS_API,
+                        'Authorization': `Bearer ${token}`
+                    }
                 });
 
                 const texto = await resp.text();
@@ -227,20 +154,24 @@ app.get('/api/check-templates', async (req, res) => {
                 try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
 
                 resultados.push({
-                    urlConsultada: url,
+                    accountKey: item.ak,
+                    urlConsultada: item.url,
                     status: resp.status,
                     autorizado: resp.ok,
                     resposta: dadosJson
                 });
             } catch (err) {
-                resultados.push({ urlConsultada: url, erro: err.message });
+                resultados.push({
+                    accountKey: item.ak,
+                    urlConsultada: item.url,
+                    erro: err.message
+                });
             }
         }
 
         res.json({
             sucesso: true,
-            canal_consultado: channelId,
-            token_validado: true,
+            origem_guia: "GoTo Connect Messaging v2 API",
             testes: resultados
         });
 
@@ -250,153 +181,79 @@ app.get('/api/check-templates', async (req, res) => {
 });
 
 // ==========================================
-// 5. OUVINTE DO WEBHOOK
+// 4. DISPARO DE MENSAGENS WHATSAPP (MESSAGING V2 GUIDE)
 // ==========================================
-app.post('/webhook', (req, res) => {
+app.post('/api/enviar-mensagem', async (req, res) => {
     try {
-        const evento = req.body;
-        if (!evento || evento.source !== 'inbox-notification') return res.status(200).send("Ignorado.");
+        const token = await obterTokenGoTo();
+        const { accountKey = "5363286181559338501", fromPhoneId, to, texto, templateName, templateParams = {} } = req.body;
 
-        const tipo = evento.type;
-        const payload = evento.content?.payload;
-        if (!payload || !payload.conversationId) return res.status(200).send("Ignorado.");
-
-        const convId = payload.conversationId;
-
-        if (!bancoDeConversas.has(convId)) {
-            bancoDeConversas.set(convId, {
-                id: convId,
-                fila: `WhatsApp Contact Center`,
-                consultor: payload.authorTouchpoint || "Equipe",
-                startTime: evento.timestamp,
-                status: 'ABERTA',
-                mensagens: []
-            });
+        if (!to) {
+            return res.status(400).json({ erro: "Destinatario 'to' obrigatorio em formato E.164 (ex: +5511999999999)" });
         }
 
-        const conversa = bancoDeConversas.get(convId);
+        // Monta o objeto request conforme guia oficial da GoTo
+        let requestObj = {
+            channel: "WHATSAPP",
+            from: fromPhoneId, // ID numérico do Meta WhatsApp Phone Number (se omitido, a GoTo tenta pelo canal padrão da conta)
+            to: Array.isArray(to) ? to : [to]
+        };
 
-        if (tipo === 'INBOUND_MESSAGE' || tipo === 'OUTBOUND_MESSAGE') {
-            conversa.mensagens.push({
-                origem: tipo === 'INBOUND_MESSAGE' ? 'cliente' : 'consultor',
-                texto: payload.body || "[Mídia/Anexo]",
-                hora: payload.timestamp || evento.timestamp
-            });
-        }
-
-        if (tipo === 'CONVERSATION_CLOSED' || payload.status === 'CLOSED') {
-            conversa.status = 'FECHADA';
-        }
-
-        res.status(200).json({ sucesso: true });
-    } catch (e) {
-        res.status(500).send("Erro interno no webhook.");
-    }
-});
-
-// ==========================================
-// 6. CÁLCULOS & IA PARA O DASHBOARD
-// ==========================================
-function calcularMinutos(inicio, fim) {
-    if (!inicio || !fim) return null;
-    return Math.max(0, Math.round((new Date(fim) - new Date(inicio)) / 60000));
-}
-
-function calcularTMR(mensagens) {
-    let tempos = [];
-    let ultimaMsgCliente = null;
-    const msgsOrdenadas = [...mensagens].sort((a, b) => new Date(a.hora) - new Date(b.hora));
-
-    for (const msg of msgsOrdenadas) {
-        if (msg.origem === 'cliente' && msg.hora) ultimaMsgCliente = new Date(msg.hora);
-        else if (msg.origem === 'consultor' && ultimaMsgCliente && msg.hora) {
-            tempos.push(Math.max(0, Math.round((new Date(msg.hora) - ultimaMsgCliente) / 60000)));
-            ultimaMsgCliente = null;
-        }
-    }
-    return tempos.length === 0 ? null : Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length);
-}
-
-const esquemaIA = {
-    type: Type.OBJECT,
-    properties: {
-        assunto_resumido: { type: Type.STRING, description: "Motivo do contato em até 4 palavras" },
-        sentimento_inferido: { type: Type.STRING, description: "Satisfeito, Neutro ou Insatisfeito" }
-    },
-    required: ["assunto_resumido", "sentimento_inferido"]
-};
-
-// ==========================================
-// 7. ROTA DO DASHBOARD
-// ==========================================
-app.get('/api/dashboard', async (req, res) => {
-    try {
-        let conversasArray = Array.from(bancoDeConversas.values());
-
-        if (conversasArray.length === 0) {
-            const caminhoMock = path.join(process.cwd(), 'data', 'conversas_mock.json');
-            if (fs.existsSync(caminhoMock)) {
-                try {
-                    const mock = JSON.parse(fs.readFileSync(caminhoMock, 'utf-8'));
-                    conversasArray = Array.isArray(mock) ? mock : (mock.conversas || []);
-                } catch (e) {}
-            }
-        }
-
-        const dadosTratados = await Promise.all(conversasArray.map(async (c) => {
-            const mensagens = c.mensagens || [];
-            const inicio = c.startTime || new Date().toISOString();
-            
-            const primeiraResposta = mensagens.find(m => m.origem === 'consultor')?.hora;
-            const conclusao = c.status === 'FECHADA' ? mensagens[mensagens.length - 1]?.hora : null;
-
-            const tme = calcularMinutos(inicio, primeiraResposta);
-            const tma = calcularMinutos(primeiraResposta, conclusao);
-            const tmr = calcularTMR(mensagens);
-            const pendente = mensagens[mensagens.length - 1]?.origem === 'cliente';
-
-            const chaveCache = `${c.id}_${mensagens.length}`;
-            let semantica = cacheAnalisesIA.get(chaveCache);
-
-            if (!semantica) {
-                if (gemini_key && mensagens.length > 0 && mensagens.some(m => m.texto && m.texto.trim() !== "")) {
-                    try {
-                        const prompt = `Analise a conversa:\n${mensagens.map(m => `${m.origem}:${m.texto}`).join('\n')}`;
-                        const response = await ai.models.generateContent({
-                            model: 'gemini-3.8-flash', contents: prompt,
-                            config: { responseMimeType: "application/json", responseSchema: esquemaIA, temperature: 0.1 }
-                        });
-                        semantica = JSON.parse(response.text);
-                    } catch (errIA) {
-                        semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
-                    }
-                } else {
-                    semantica = { assunto_resumido: "Atendimento Geral", sentimento_inferido: "Neutro" };
-                }
-                cacheAnalisesIA.set(chaveCache, semantica);
-            }
-
-            return {
-                id: c.id, 
-                data: inicio.split('T')[0], 
-                fila: c.fila || "WhatsApp", 
-                consultor: c.consultor || "Consultor",
-                tme_val: tme, tma_val: tma, tmr_val: tmr, nota_goto: null,
-                tme_texto: tme !== null ? `${tme} min` : "Na fila",
-                tma_texto: tma !== null ? `${tma} min` : "Em Andamento",
-                tmr_texto: tmr !== null ? `${tmr} min` : "N/D",
-                status: pendente ? "Pendente" : "Respondido",
-                assunto: semantica.assunto_resumido, 
-                qualidade_resumo: semantica.sentimento_inferido
+        if (templateName) {
+            // Disparo de Template
+            requestObj.type = "template";
+            requestObj.template = {
+                name: templateName,
+                ...templateParams
             };
-        }));
+        } else {
+            // Disparo de Mensagem Simples (Janela de 24h)
+            requestObj.type = "simple";
+            requestObj.components = [
+                {
+                    type: "body",
+                    components: [
+                        {
+                            type: "text",
+                            attributes: { text: texto || "Olá! Como podemos ajudar?" }
+                        }
+                    ]
+                }
+            ];
+        }
 
-        res.json({ sucesso: true, dados: dadosTratados, origem: "servidor_vercel" });
-    } catch (erro) {
-        res.status(500).json({ sucesso: false, erro: erro.message });
+        // Envio no formato multipart/form-data conforme curl da documentação GoTo
+        const formData = new FormData();
+        const blobRequest = new Blob([JSON.stringify(requestObj)], { type: 'application/json' });
+        formData.append('request', blobRequest);
+
+        const resp = await fetch(`https://api.goto.com/messaging/v2/accounts/${accountKey}/messages`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const textoResp = await resp.text();
+        let dadosJson;
+        try { dadosJson = JSON.parse(textoResp); } catch (e) { dadosJson = textoResp; }
+
+        res.status(resp.status).json({
+            sucesso: resp.ok,
+            status: resp.status,
+            resposta: dadosJson
+        });
+
+    } catch (e) {
+        res.status(500).json({ sucesso: false, erro: e.message });
     }
 });
 
+// ==========================================
+// 5. OUVINTE DO WEBHOOK E DASHBOARD
+// ==========================================
+app.post('/webhook', (req, res) => res.status(200).json({ sucesso: true }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 export default app;
