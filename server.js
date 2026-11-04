@@ -110,69 +110,119 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// RASTREAMENTO DA CAIXA E BUSCA DE TEMPLATES
+// DESCOBERTA DE IDENTIDADE, CONTA E TEMPLATES
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
+    const diagnostico = {
+        etapa_1_identidade: null,
+        etapa_2_accountKeys_descobertas: [],
+        etapa_3_canais_e_touchpoints: [],
+        etapa_4_templates: []
+    };
+
     try {
         const token = await obterTokenGoTo();
         const { channelId } = obterCredenciais(req);
-        const accountKeys = ["5363286181559338501", "4055072950408524550"];
 
-        // 1. Descoberta das Caixas de Entrada (Inbox) e Canais cadastrados
-        let dadosInboxes = null;
-        let dadosCanaisInbox = null;
+        // ETAPA 1: Identificar a conta real do usuário pelo sub oficial (2282424916053003020)
+        const urlsIdentidade = [
+            'https://api.goto.com/users/v1/users/2282424916053003020',
+            'https://api.goto.com/users/v1/me',
+            'https://api.goto.com/identity/scim/v2/Me'
+        ];
 
-        try {
-            const respInboxes = await fetch('https://api.goto.com/inbox/v1/inboxes', {
-                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
-            });
-            if (respInboxes.ok) dadosInboxes = await respInboxes.json();
-        } catch (e) {}
+        let dadosUsuario = null;
+        for (const url of urlsIdentidade) {
+            try {
+                const resp = await fetch(url, { headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` } });
+                const texto = await resp.text();
+                let json;
+                try { json = JSON.parse(texto); } catch (e) { json = texto; }
+                if (resp.ok) {
+                    dadosUsuario = { url, dados: json };
+                    break;
+                }
+            } catch (e) {}
+        }
+        diagnostico.etapa_1_identidade = dadosUsuario;
 
-        try {
-            const respCanais = await fetch('https://api.goto.com/inbox/v1/channels', {
-                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
-            });
-            if (respCanais.ok) dadosCanaisInbox = await respCanais.json();
-        } catch (e) {}
+        // ETAPA 2: Extrair todas as chaves de conta candidatas do perfil do usuário
+        const accountKeysEncontradas = new Set();
+        if (dadosUsuario?.dados) {
+            const u = dadosUsuario.dados;
+            // Varre campos típicos da GoTo
+            const campos = [u.accountKey, u.organizationKey, u.organizationId, u.accountId, u.key, u.organization?.key];
+            campos.filter(Boolean).forEach(k => accountKeysEncontradas.add(String(k)));
+        }
 
-        // 2. Variações do touchpoint para testar na API de Templates
-        // Testamos o número com DDI, número limpo, número com '+', e o channel_id UUID
-        const touchpointsParaTestar = [
+        // Se a busca automática não achar, mantém os fallbacks conhecidos
+        if (accountKeysEncontradas.size === 0) {
+            accountKeysEncontradas.add("5363286181559338501");
+            accountKeysEncontradas.add("4055072950408524550");
+        }
+        diagnostico.etapa_2_accountKeys_descobertas = Array.from(accountKeysEncontradas);
+
+        // ETAPA 3: Consultar Canais e Touchpoints em cada accountKey
+        const touchpointsDescobertos = new Set([
             "551151992000",
             "+551151992000",
             "1151992000",
             channelId
-        ];
+        ]);
 
-        const testesTemplates = [];
+        for (const ak of diagnostico.etapa_2_accountKeys_descobertas) {
+            const rotasCanais = [
+                `https://api.goto.com/messaging/v2/accounts/${ak}/channels`,
+                `https://api.goto.com/messaging/v2/accounts/${ak}/touchpoints`
+            ];
 
-        for (const ak of accountKeys) {
-            for (const tp of touchpointsParaTestar) {
+            for (const url of rotasCanais) {
+                try {
+                    const resp = await fetch(url, { headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` } });
+                    const texto = await resp.text();
+                    let json;
+                    try { json = JSON.parse(texto); } catch (e) { json = texto; }
+                    
+                    diagnostico.etapa_3_canais_e_touchpoints.push({ url, status: resp.status, dados: json });
+
+                    // Se a API retornar uma lista de canais/touchpoints, capturamos os IDs numéricos
+                    if (resp.ok && Array.isArray(json?.items || json)) {
+                        const lista = json.items || json;
+                        for (const item of lista) {
+                            if (item.id) touchpointsDescobertos.add(String(item.id));
+                            if (item.touchpoint) touchpointsDescobertos.add(String(item.touchpoint));
+                            if (item.phoneNumberId) touchpointsDescobertos.add(String(item.phoneNumberId));
+                        }
+                    }
+                } catch (e) {
+                    diagnostico.etapa_3_canais_e_touchpoints.push({ url, erro: e.message });
+                }
+            }
+        }
+
+        // ETAPA 4: Consultar Templates oficiais (Step 1 da Documentação Messaging v2)
+        for (const ak of diagnostico.etapa_2_accountKeys_descobertas) {
+            for (const tp of touchpointsDescobertos) {
                 const url = `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?ownerTouchpoint=${encodeURIComponent(tp)}`;
                 try {
-                    const resp = await fetch(url, {
-                        headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
-                    });
-
+                    const resp = await fetch(url, { headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` } });
                     const texto = await resp.text();
-                    let dadosJson = null;
-                    try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
+                    let json;
+                    try { json = JSON.parse(texto); } catch (e) { json = texto; }
 
                     if (resp.ok) {
-                        testesTemplates.push({
+                        diagnostico.etapa_4_templates.push({
                             accountKey: ak,
-                            touchpoint_valido: tp,
+                            ownerTouchpoint_valido: tp,
                             status: resp.status,
-                            templates: dadosJson
+                            templates: json
                         });
                     } else if (resp.status !== 404) {
-                        // Registra se retornar algo diferente de 404 (como erro de validação ou permissão específica)
-                        testesTemplates.push({
+                        diagnostico.etapa_4_templates.push({
                             accountKey: ak,
-                            touchpoint_testado: tp,
+                            ownerTouchpoint_testado: tp,
                             status: resp.status,
-                            resposta: dadosJson
+                            resposta: json
                         });
                     }
                 } catch (e) {}
@@ -181,11 +231,7 @@ app.get('/api/check-templates', async (req, res) => {
 
         res.json({
             sucesso: true,
-            caixa_procurada: "Relacionamento de Locação",
-            telefone_base: "+55 11 5199 2000",
-            inboxes_encontradas: dadosInboxes,
-            canais_inbox_encontrados: dadosCanaisInbox,
-            templates_descobertos: testesTemplates
+            resultado: diagnostico
         });
 
     } catch (erro) {
@@ -194,22 +240,24 @@ app.get('/api/check-templates', async (req, res) => {
 });
 
 // ==========================================
-// DISPARO DE MENSAGENS WHATSAPP
+// DISPARO DE MENSAGENS WHATSAPP (MESSAGING V2)
 // ==========================================
 app.post('/api/enviar-mensagem', async (req, res) => {
     try {
         const token = await obterTokenGoTo();
         const { 
-            accountKey = "5363286181559338501", 
-            fromPhoneId = "551151992000", 
+            accountKey, 
+            fromPhoneId, 
             to, 
             texto, 
             templateName, 
             templateParams = [] 
         } = req.body;
 
-        if (!to) {
-            return res.status(400).json({ erro: "Campo 'to' obrigatorio (ex: +5511999999999)." });
+        if (!to || !fromPhoneId || !accountKey) {
+            return res.status(400).json({ 
+                erro: "Campos 'accountKey', 'fromPhoneId' e 'to' (ex: +5511999999999) sao obrigatorios." 
+            });
         }
 
         let requestObj = {
