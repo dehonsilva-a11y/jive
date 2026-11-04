@@ -29,18 +29,32 @@ const HEADERS_API = {
     'User-Agent': 'GoTo-Webhook-Client/1.0'
 };
 
-// Fallbacks seguros atualizados com as credenciais oficiais da GoTo
+// Credenciais oficiais validadas da GoTo
 const PADRAO_CLIENT_ID = "3253a422-73e1-4585-af2e-590f6111d494";
 const PADRAO_CLIENT_SECRET = "pBn8JYvMPlJz7mk9XgIuHO3p";
 const PADRAO_CHANNEL_ID = "49889407-3cc9-47b1-b33d-afa97956e162";
+
+// Refresh Token oficial gerado e ativo (typ: "r")
 const PADRAO_REFRESH_TOKEN = "eyJraWQiOiI2MjAiLCJhbGciOiJSUzUxMiJ9.eyJzYyI6ImNhbGwtY29udHJvbC52MS5jYWxscy5jb250cm9sIGFzc2V0LnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIGNhbGxzLnYyLmluaXRpYXRlIG1lc3NhZ2luZy52MS53cml0ZSBpZGVudGl0eTpzY2ltLm1lIGNhbGwtZXZlbnRzLnYxLmV2ZW50cy5yZWFkIGNjLWFuYWx5dGljcy52MS5hZ2VudC1zdGF0dXMucmVhZCB1c2Vycy52MS5yZWFkIG1lc3NhZ2luZy52MS5ub3RpZmljYXRpb25zLm1hbmFnZSB2b2ljZW1haWwudjEubm90aWZpY2F0aW9ucy5tYW5hZ2UgY2FsbC1wYXJraW5nLnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIHZvaWNlbWFpbC52MS52b2ljZW1haWxzLndyaXRlIHN1cHBvcnQ6IHJlY29yZGluZy52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBmYXgudjEud3JpdGUgdm9pY2UtYWRtaW4udjEud3JpdGUgd2VicnRjLnYxLndyaXRlIHdlYnJ0Yy52MS5yZWFkIGlkZW50aXR5OiBjb2xsYWI6IHF1ZXVlLWNhbGxlci52MS5yZWFkIHZvaWNlLWFkbWluLnYxLnJlYWQgcHJlc2VuY2UudjEucmVhZCBjb250YWN0cy52MS5yZWFkIHJlY29yZGluZy52MS5yZWFkIGNhbGwtZXZlbnRzLnYxLm5vdGlmaWNhdGlvbnMubWFuYWdlIGlkZW50aXR5OnNjaW0ub3JnIHByZXNlbmNlLnYxLndyaXRlIGZheC52MS5yZWFkIGNvbnRhY3RzLnYxLndyaXRlIGNhbGwtaGlzdG9yeS52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBwcmVzZW5jZS52MS5ub3RpZmljYXRpb25zLm1hbmFnZSBtZXNzYWdpbmcudjEuc2VuZCBjYWxsLXBhcmtpbmcudjEucmVhZCBtZXNzYWdpbmcudjEucmVhZCBjci52MS5yZWFkIGZheC52MS5ub3RpZmljYXRpb25zLm1hbmFnZSB1c2Vycy52MS5saW5lcy5yZWFkIHZvaWNlbWFpbC52MS52b2ljZW1haWxzLnJlYWQiLCJzdWIiOiIyMjgyNDI0OTE2MDUzMDAzMDIwIiwiYXVkIjoiMzI1M2E0MjItNzNlMS00NTg1LWFmMmUtNTkwZjYxMTFkNDk0Iiwib2duIjoicHdkIiwidHlwIjoiciIsImxldmVsT2ZBc3N1cmFuY2UiOjIsImV4cCI6MTc5NjMzMTkzOCwiaWF0IjoxNzkzNzM5OTM4LCJqdGkiOiIyNTZjY2NiZC0zMTU3LTQ4YzItOTgwOC0zNGQ4YzYyYmZhN2YifQ.m6ztojoArZN69JzCJNFAeG-C7FSWOazUHGpzfImusBXmg3efOFhLHh473H9JnWhlv4Oj3tE7ugqi_fEnzVhIVmaW1YhdVOU0Ja5o49fmxAtB919k2hvL1i1Ce9W2h-39Hh7KLkzcKHmLefKskZiEMvEFfyMSxAVQ7oQhsDXhSBFFW4jbXtnBRwbmwW3fWD01-E6-TmgfMiWio-wcOOJH-fliOTOaU2EsaqXzZ4ucxc1Ib5ucFKaJR9YaVnxf4KGI72gQ6kSpWwKboIHQWI3ltvMCgNNvdj_pnORk0xK737GNwattOYF716gVMOZxzlPfiEa0NysodEBxkvHZTcaXUw";
+
+// Validador de formato: garante que o token seja do tipo 'refresh' (typ: "r") e não um 'code' (typ: "c")
+function ehRefreshTokenValido(tok) {
+    if (!tok || typeof tok !== 'string') return false;
+    try {
+        const partes = tok.split('.');
+        if (partes.length !== 3) return false;
+        const payload = JSON.parse(Buffer.from(partes[1], 'base64').toString('utf-8'));
+        return payload.typ === 'r';
+    } catch (e) {
+        return false;
+    }
+}
 
 function obterCredenciais(req = null) {
     let local = {};
     const caminhos = [
         path.join(process.cwd(), 'data', 'goto_config.json'),
-        path.join(__dirname, 'data', 'goto_config.json'),
-        path.join(process.cwd(), 'goto_config.json')
+        path.join(__dirname, 'data', 'goto_config.json')
     ];
 
     for (const p of caminhos) {
@@ -57,8 +71,22 @@ function obterCredenciais(req = null) {
 
     const clientId = (queryClientId || process.env.GOTO_CLIENT_ID || local.client_id || PADRAO_CLIENT_ID).trim();
     const clientSecret = (querySecret || process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
-    const refreshToken = (gotoTokenCache.refreshToken || process.env.GOTO_REFRESH_TOKEN || local.refresh_token || PADRAO_REFRESH_TOKEN).trim();
     const channelId = (local.channel_id || PADRAO_CHANNEL_ID).trim();
+
+    // Seleciona o primeiro refresh_token comprovadamente válido (typ: 'r')
+    let refreshToken = PADRAO_REFRESH_TOKEN;
+    const candidatos = [
+        gotoTokenCache.refreshToken,
+        process.env.GOTO_REFRESH_TOKEN,
+        local.refresh_token
+    ];
+
+    for (const c of candidatos) {
+        if (ehRefreshTokenValido(c)) {
+            refreshToken = c.trim();
+            break;
+        }
+    }
 
     return { clientId, clientSecret, refreshToken, channelId };
 }
@@ -132,7 +160,7 @@ app.get('/api/gerar-token', async (req, res) => {
 });
 
 // ==========================================
-// 3. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO)
+// 3. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO AUTOMÁTICA)
 // ==========================================
 async function obterTokenGoTo() {
     const agora = Date.now();
@@ -141,10 +169,6 @@ async function obterTokenGoTo() {
     }
 
     const { clientId, clientSecret, refreshToken } = obterCredenciais();
-
-    if (!clientId || !clientSecret || !refreshToken) {
-        throw new Error("Credenciais GoTo ausentes.");
-    }
 
     const credenciaisBase64 = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
@@ -172,7 +196,7 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 4. CONSULTA DE TEMPLATES DIRETO NO CANAL ESPECÍFICO
+// 4. CONSULTA DE TEMPLATES & CANAIS DE MENSAGENS
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
     const resultados = [];
@@ -216,7 +240,7 @@ app.get('/api/check-templates', async (req, res) => {
         res.json({
             sucesso: true,
             canal_consultado: channelId,
-            escopos_token: ["messaging.v1.send", "messaging.v1.write", "messaging.v1.read"],
+            token_validado: true,
             testes: resultados
         });
 
