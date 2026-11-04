@@ -10,9 +10,6 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// ==========================================
-// 1. CONFIGURAÇÕES & SEGURANÇA
-// ==========================================
 const gemini_key = process.env.GEMINI_KEY || "";
 const ai = new GoogleGenAI({ apiKey: gemini_key });
 
@@ -67,7 +64,7 @@ function obterCredenciais(req = null) {
 
     const clientId = (queryClientId || process.env.GOTO_CLIENT_ID || local.client_id || PADRAO_CLIENT_ID).trim();
     const clientSecret = (querySecret || process.env.GOTO_CLIENT_SECRET || local.client_secret || PADRAO_CLIENT_SECRET).trim();
-    const channelId = (local.channel_id || PADRAO_CHANNEL_ID).trim();
+    const channelId = (req?.query?.channelId || local.channel_id || PADRAO_CHANNEL_ID).trim();
 
     let refreshToken = PADRAO_REFRESH_TOKEN;
     const candidatos = [
@@ -86,9 +83,6 @@ function obterCredenciais(req = null) {
     return { clientId, clientSecret, refreshToken, channelId };
 }
 
-// ==========================================
-// 2. AUTENTICAÇÃO OAUTH 2.0 (RENOVAÇÃO AUTOMÁTICA)
-// ==========================================
 async function obterTokenGoTo() {
     const agora = Date.now();
     if (gotoTokenCache.token && agora < gotoTokenCache.expiraEm - 60000) {
@@ -108,10 +102,7 @@ async function obterTokenGoTo() {
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken })
     });
 
-    if (!resposta.ok) {
-        const erroMsg = await resposta.text();
-        throw new Error(`Falha na autenticacao GoTo: ${erroMsg}`);
-    }
+    if (!resposta.ok) throw new Error(`Falha na autenticacao GoTo: ${await resposta.text()}`);
 
     const dados = await resposta.json();
     gotoTokenCache.token = dados.access_token;
@@ -122,31 +113,51 @@ async function obterTokenGoTo() {
 }
 
 // ==========================================
-// 3. CONSULTA OFICIAL DE TEMPLATES (MESSAGING V2 GUIDE)
+// CONSULTA OFICIAL COM OWNER TOUCHPOINT & DESCOBERTA DE CANAIS
 // ==========================================
 app.get('/api/check-templates', async (req, res) => {
     const resultados = [];
     try {
         const token = await obterTokenGoTo();
-        const accountKeys = ["5363286181559338501", "4055072950408524550"];
+        const { channelId } = obterCredenciais(req);
+        const touchpointParam = req.query.ownerTouchpoint || channelId;
 
-        // Endpoints oficiais conforme a documentação de Messaging v2
+        // 1. Identificar o usuário e a conta oficial pelo endpoint /users/v1/me
+        let contaIdentificada = null;
+        try {
+            const respMe = await fetch('https://api.goto.com/users/v1/me', {
+                headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
+            });
+            if (respMe.ok) {
+                contaIdentificada = await respMe.json();
+            }
+        } catch (e) {}
+
+        const accountKeys = [
+            contaIdentificada?.accountKey,
+            "5363286181559338501",
+            "4055072950408524550"
+        ].filter(Boolean);
+
+        const accountKeysUnicas = [...new Set(accountKeys)];
+
+        // 2. Montar as rotas passando o ownerTouchpoint obrigatório e rotas de descoberta de canais
         const rotasParaTestar = [];
 
-        for (const ak of accountKeys) {
-            // Rota exata do Step 1 da documentação
-            rotasParaTestar.push({ ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates` });
-            rotasParaTestar.push({ ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?channel=WHATSAPP` });
+        for (const ak of accountKeysUnicas) {
+            // Chamada oficial do Step 1 com ownerTouchpoint
+            rotasParaTestar.push({ tipo: 'Templates (ownerTouchpoint)', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/message-templates?ownerTouchpoint=${touchpointParam}` });
+            
+            // Rotas de listagem para descobrir IDs numéricos de touchpoints cadastrados
+            rotasParaTestar.push({ tipo: 'Descoberta Touchpoints', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/touchpoints` });
+            rotasParaTestar.push({ tipo: 'Descoberta Channels', ak, url: `https://api.goto.com/messaging/v2/accounts/${ak}/channels` });
         }
 
         for (const item of rotasParaTestar) {
             try {
                 const resp = await fetch(item.url, {
                     method: 'GET',
-                    headers: {
-                        ...HEADERS_API,
-                        'Authorization': `Bearer ${token}`
-                    }
+                    headers: { ...HEADERS_API, 'Authorization': `Bearer ${token}` }
                 });
 
                 const texto = await resp.text();
@@ -154,6 +165,7 @@ app.get('/api/check-templates', async (req, res) => {
                 try { dadosJson = JSON.parse(texto); } catch (e) { dadosJson = texto; }
 
                 resultados.push({
+                    finalidade: item.tipo,
                     accountKey: item.ak,
                     urlConsultada: item.url,
                     status: resp.status,
@@ -162,6 +174,7 @@ app.get('/api/check-templates', async (req, res) => {
                 });
             } catch (err) {
                 resultados.push({
+                    finalidade: item.tipo,
                     accountKey: item.ak,
                     urlConsultada: item.url,
                     erro: err.message
@@ -171,7 +184,8 @@ app.get('/api/check-templates', async (req, res) => {
 
         res.json({
             sucesso: true,
-            origem_guia: "GoTo Connect Messaging v2 API",
+            usuario_me: contaIdentificada ? { nome: contaIdentificada.name, email: contaIdentificada.email, accountKey: contaIdentificada.accountKey } : "Nao retornado",
+            ownerTouchpoint_testado: touchpointParam,
             testes: resultados
         });
 
@@ -181,7 +195,7 @@ app.get('/api/check-templates', async (req, res) => {
 });
 
 // ==========================================
-// 4. DISPARO DE MENSAGENS WHATSAPP (MESSAGING V2 GUIDE)
+// DISPARO DE MENSAGENS WHATSAPP
 // ==========================================
 app.post('/api/enviar-mensagem', async (req, res) => {
     try {
@@ -192,22 +206,19 @@ app.post('/api/enviar-mensagem', async (req, res) => {
             return res.status(400).json({ erro: "Destinatario 'to' obrigatorio em formato E.164 (ex: +5511999999999)" });
         }
 
-        // Monta o objeto request conforme guia oficial da GoTo
         let requestObj = {
             channel: "WHATSAPP",
-            from: fromPhoneId, // ID numérico do Meta WhatsApp Phone Number (se omitido, a GoTo tenta pelo canal padrão da conta)
+            from: fromPhoneId,
             to: Array.isArray(to) ? to : [to]
         };
 
         if (templateName) {
-            // Disparo de Template
             requestObj.type = "template";
             requestObj.template = {
                 name: templateName,
                 ...templateParams
             };
         } else {
-            // Disparo de Mensagem Simples (Janela de 24h)
             requestObj.type = "simple";
             requestObj.components = [
                 {
@@ -222,16 +233,13 @@ app.post('/api/enviar-mensagem', async (req, res) => {
             ];
         }
 
-        // Envio no formato multipart/form-data conforme curl da documentação GoTo
         const formData = new FormData();
         const blobRequest = new Blob([JSON.stringify(requestObj)], { type: 'application/json' });
         formData.append('request', blobRequest);
 
         const resp = await fetch(`https://api.goto.com/messaging/v2/accounts/${accountKey}/messages`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            },
+            headers: { 'Authorization': `Bearer ${token}` },
             body: formData
         });
 
@@ -250,9 +258,6 @@ app.post('/api/enviar-mensagem', async (req, res) => {
     }
 });
 
-// ==========================================
-// 5. OUVINTE DO WEBHOOK E DASHBOARD
-// ==========================================
 app.post('/webhook', (req, res) => res.status(200).json({ sucesso: true }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
